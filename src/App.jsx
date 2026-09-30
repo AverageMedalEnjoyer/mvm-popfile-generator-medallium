@@ -1,5 +1,11 @@
 import { useState } from "react";
 
+import mapsText from "./mvm_maps.txt?raw";
+const MAPS = mapsText
+  .split("\n")
+  .map((l) => l.trim())
+  .filter(Boolean);
+
 const TEMPLATES = {
   Scout:["Class Scout","T_TFBot_Scout_Melee","T_TFBot_Scout_Bonk","T_TFBot_Scout_Sandman","T_TFBot_Scout_Sandman_FastCharge","T_TFBot_Scout_FAN","T_TFBot_Scout_Shortstop","T_TFBot_Scout_Jumping_Sandman","T_TFBot_Scout_Scattergun_SlowFire","T_TFBot_Scout_SunStick","T_TFBot_Scout_Wrap_Assassin"],
   Soldier:["Class Soldier","T_TFBot_Soldier_RocketShotgun","T_TFBot_Soldier_RocketPush","T_TFBot_Soldier_Buff_Banner","T_TFBot_Soldier_Extended_Buff_Banner","T_TFBot_Soldier_Extended_Concheror","T_TFBot_Soldier_Extended_Battalion"],
@@ -611,7 +617,11 @@ export default function App() {
           {tab === "globals" && (
             <div style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 8, padding: 16 }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <Inp t={t} label="Map" value={g.map} onChange={v => sg({ ...g, map: v })} type="text" width={180} />
+                <Sel t={t} label="Map" value={g.map} onChange={v => sg({ ...g, map: v })} width={180}>
+                  {MAPS.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </Sel>
                 <Inp t={t} label="Starting $" value={g.money} onChange={v => sg({ ...g, money: v })} />
                 <Inp t={t} label="Respawn" value={g.respawn} onChange={v => sg({ ...g, respawn: v })} />
                 <Sel t={t} label="Bots Attack In Spawnroom" value={g.attack} onChange={v => sg({ ...g, attack: v })}><option value="no">No</option><option value="yes">Yes</option></Sel>
