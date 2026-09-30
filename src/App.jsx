@@ -586,7 +586,7 @@ export default function App() {
       <style>{`* { box-sizing: border-box; } button:hover { filter: brightness(1.15); } select { cursor: pointer; } ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }`}</style>
  
       <div style={{ borderBottom: "2px solid " + t.ac, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: t.ac, letterSpacing: 2, textTransform: "uppercase" }}>MvM Popfile Creator</h1>
+        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: t.ac, letterSpacing: 2, textTransform: "uppercase" }}>MvM Popfile Creator: Medallium</h1>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => slm(!lm)} style={{ ...btn2, fontSize: 16, padding: "4px 10px" }}>{lm ? "\uD83C\uDF19" : "\u2600\uFE0F"}</button>
           <button onClick={loadProject} style={btn2}>Load</button>
