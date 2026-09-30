@@ -142,7 +142,7 @@ ICON_MAP["T_TFGateBot_Chief_Heavyweapons_HealOnKill"]=IC+"heavy_deflector_healon
 
 function getIcon(tmpl) { return ICON_MAP[tmpl] || null; }
  
-const UNKNOWN_COLORS = ["#e84c30","#4fc3f7","#f0c020","#4caf50","#ce93d8","#ff8a65","#81d4fa","#aed581","#f48fb1","#ffcc80"];
+const UNKNOWN_COLORS = ["#f0c020","#4fc3f7","#f0c020","#4caf50","#ce93d8","#ff8a65","#81d4fa","#aed581","#f48fb1","#ffcc80"];
 function unknownColor(key) {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
@@ -311,8 +311,8 @@ function genPop(g, mis, wavs, cust) {
 }
  
 // ── Styles ──
-const dark = { bg: "#0a0a0a", card: "#141414", ci: "#0d0d0d", bd: "#2a2a2a", ac: "#e84c30", ac2: "#f5a623", tx: "#e0e0e0", txd: "#777", ib: "#1a1a1a", it: "#e0e0e0", ibd: "#333" };
-const light = { bg: "#f2f0ed", card: "#fff", ci: "#f7f6f4", bd: "#d4d0ca", ac: "#c73e1d", ac2: "#d48c1a", tx: "#1a1a1a", txd: "#888", ib: "#fff", it: "#1a1a1a", ibd: "#ccc" };
+const dark = { bg: "#0a0a0a", card: "#141414", ci: "#0d0d0d", bd: "#2a2a2a", ac: "#f0c020", ac2: "#f5a623", tx: "#e0e0e0", txd: "#777", ib: "#1a1a1a", it: "#e0e0e0", ibd: "#333" };
+const light = { bg: "#f2f0ed", card: "#fff", ci: "#f7f6f4", bd: "#d4d0ca", ac: "#c9a227", ac2: "#d48c1a", tx: "#1a1a1a", txd: "#888", ib: "#fff", it: "#1a1a1a", ibd: "#ccc" };
  
 function Inp({ t, label, value, onChange, type, width }) {
   return (
@@ -347,7 +347,7 @@ function BotDropdown({ t, value, onChange, customBots }) {
     const isGiant = cat.startsWith("Giant");
     const isChief = cat === "Chief" || cat.indexOf("Gatebot Chief") >= 0;
     const isGate = cat.indexOf("Gatebot") >= 0 && !isChief;
-    const color = isChief ? "#e84c30" : isGate ? "#f0c020" : isGiant ? "#4caf50" : t.it;
+    const color = isChief ? "#f0c020" : isGate ? "#f0c020" : isGiant ? "#4caf50" : t.it;
     allItems.push({
       cat, color,
       items: list.map(tm => ({
