@@ -5,7 +5,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
-    title: "MvM Popfile Creator",
+    title: "MvM Popfile Creator: Medallium",
     icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
