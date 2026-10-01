@@ -1,6 +1,6 @@
 # MvM Popfile Creator: Medallium
 
-Heavyily editted version of Consulcast Gaming's MVM Popfile Creator. Though this definitely has AI in it, this is mainly just for me, as there is not really any good way to easily make MVM popfiles (mvm.tf has not gotten an update in literally years).
+Heavily editted version of Consulcast Gaming's MVM Popfile Creator. Though this definitely has AI in it, this is mainly just for me, as there is not really any good way to easily make MVM popfiles (mvm.tf has not gotten an update in literally years).
 
 ## Build as Desktop App (.exe)
 
