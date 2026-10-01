@@ -13,17 +13,6 @@ npm run package
 
 This creates a portable .exe in the `release` folder. No installation needed — just double-click to run.
 
-### Option B: Run with Electron (no packaging)
-
-```
-npm install
-npm run electron-dev
-```
-
-This builds the app and opens it in an Electron window directly.
-\
-Open `dist/index.html` directly in your browser. You can make a desktop shortcut to this file.
-
 ## Troubleshooting
 
 - If `npm install` fails, try deleting `node_modules` and `package-lock.json`, then run `npm install` again
@@ -33,9 +22,7 @@ Open `dist/index.html` directly in your browser. You can make a desktop shortcut
 
 1. Export your mission using the .pop button
 2. Place the file in: `tf/scripts/population/`
-3. In TF2, open console and type: `map <mapname>` then `tf_mvm_popfile <filename>`
-
-- For public testing check out potato.tf
+3. In TF2, open console and type: `map <mapname>` then `tf_mvm_popfile <filename>`. You can also directly vote for your mission.
 
 ## Features
 
