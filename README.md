@@ -1,17 +1,6 @@
-# MvM Popfile Creator
+# MvM Popfile Creator: Medallium
 
-A desktop app for creating TF2 Mann vs. Machine popfiles. My intention was to facilitate easier creation of MvM population files via a GUI. This program was written via Anthropic's Claude AI. Webpage version: https://consulcast-gaming.github.io/mvm-popfile-generator/
-
-## Quick Start (Browser Only)
-
-1. Install Node.js from https://nodejs.org (LTS version)
-2. Open a terminal in this folder
-3. Run these commands:
-
-```
-npm install
-npm run dev
-```
+Heavyily editted version of Consulcast Gaming's MVM Popfile Creator. Though this definitely has AI in it, this is mainly just for me, as there is not really any good way to easily make MVM popfiles (mvm.tf has not gotten an update in literally years).
 
 4. Open http://localhost:5173 in your browser
 
@@ -34,14 +23,7 @@ npm run electron-dev
 ```
 
 This builds the app and opens it in an Electron window directly.
-
-### Option C: Static HTML (no server needed)
-
-```
-npm install
-npm run build
-```
-
+\
 Open `dist/index.html` directly in your browser. You can make a desktop shortcut to this file.
 
 ## Troubleshooting
