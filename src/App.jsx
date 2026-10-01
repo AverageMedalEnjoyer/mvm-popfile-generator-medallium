@@ -5,6 +5,53 @@ const MAPS = mapsText
   .split("\n")
   .map((l) => l.trim())
   .filter(Boolean);
+  
+import spawnsText from "./mvm_spawns.txt?raw";
+const MAP_SPAWNS = (() => {
+  const out = {};
+  const blocks = spawnsText.trim().split(/\n\s*\n/);
+  for (const block of blocks) {
+    const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length >= 2) out[lines[0]] = lines.slice(1);
+  }
+  return out;
+})();
+
+function getSpawnsForMap(map) {
+  return MAP_SPAWNS[map] && MAP_SPAWNS[map].length ? MAP_SPAWNS[map] : ["spawnbot"];
+}
+
+function resolveSpawn(map, where) {
+  const opts = getSpawnsForMap(map);
+  if (where && opts.includes(where)) return where;
+  if (opts.includes("spawnbot")) return "spawnbot";
+  return opts[0];
+}
+
+function botLabel(tmpl) {
+  if (!tmpl) return "?";
+  return tmpl
+    .replace(/^T_TFBot_/, "")
+    .replace(/^T_TFGateBot_/, "GB:")
+    .replace(/^Class /, "")
+    .replace(/_/g, " ");
+}
+
+function spawnSummary(sp) {
+  if (sp.name && String(sp.name).trim()) return String(sp.name).trim();
+  if (sp.type === "tank") return (sp.tank && sp.tank.name) || "Tank";
+  let bots = [];
+  if (sp.type === "single") bots = sp.bots || [];
+  else if (sp.type === "squad") bots = sp.squadBots || [];
+  else if (sp.type === "random") bots = sp.randomBots || [];
+  const seen = new Set();
+  const labels = [];
+  for (const b of bots) {
+    const l = botLabel(b.template);
+    if (!seen.has(l)) { seen.add(l); labels.push(l); }
+  }
+  return labels.length ? labels.join(", ") : (sp.type || "WaveSpawn");
+}
 
 const TEMPLATES = {
   Scout:["Class Scout","T_TFBot_Scout_Melee","T_TFBot_Scout_Bonk","T_TFBot_Scout_Sandman","T_TFBot_Scout_Sandman_FastCharge","T_TFBot_Scout_FAN","T_TFBot_Scout_Shortstop","T_TFBot_Scout_Jumping_Sandman","T_TFBot_Scout_Scattergun_SlowFire","T_TFBot_Scout_SunStick","T_TFBot_Scout_Wrap_Assassin"],
@@ -534,6 +581,9 @@ export default function App() {
   const [aw, saw] = useState(0);
   const [prev, sprev] = useState(false);
   const [lm, slm] = useState(false);
+  const [wsOpen, setWsOpen] = useState({});
+  const isWsOpen = (id) => !!wsOpen[id];
+  const toggleWs = (id) => setWsOpen((o) => ({ ...o, [id]: !o[id] }));
  
   const t = lm ? light : dark;
   const btn = { background: t.ac, color: "#fff", border: "none", borderRadius: 4, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 };
@@ -617,7 +667,14 @@ export default function App() {
           {tab === "globals" && (
             <div style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 8, padding: 16 }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <Sel t={t} label="Map" value={g.map} onChange={v => sg({ ...g, map: v })} width={180}>
+                <Sel t={t} label="Map" value={g.map} onChange={v => {
+                  sg({ ...g, map: v });
+                  smis(mis.map(m => ({ ...m, where: resolveSpawn(v, m.where) })));
+                  swavs(wavs.map(w => ({
+                    ...w,
+                    spawns: w.spawns.map(sp => ({ ...sp, where: resolveSpawn(v, sp.where) })),
+                  })));
+                }} width={180}>
                   {MAPS.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
@@ -647,7 +704,9 @@ export default function App() {
                     <Sel t={t} label="Objective" value={m.obj} onChange={v => { const n = [...mis]; n[i] = { ...m, obj: v }; smis(n); }}>
                       {["DestroySentries", "Spy", "Sniper", "Engineer"].map(o => <option key={o}>{o}</option>)}
                     </Sel>
-                    <Inp t={t} label="Where" value={m.where} onChange={v => { const n = [...mis]; n[i] = { ...m, where: v }; smis(n); }} type="text" width={120} />
+                    <Sel t={t} label="Spawn" value={resolveSpawn(g.map, m.where)} onChange={v => { const n = [...mis]; n[i] = { ...m, where: v }; smis(n); }} width={180}>
+                      {getSpawnsForMap(g.map).map(s => <option key={s} value={s}>{s}</option>)}
+                    </Sel>
                     <Inp t={t} label="Init Cooldown" value={m.ic} onChange={v => { const n = [...mis]; n[i] = { ...m, ic: v }; smis(n); }} />
                     <Inp t={t} label="Begin" value={m.bw} onChange={v => { const n = [...mis]; n[i] = { ...m, bw: v }; smis(n); }} />
                     <Inp t={t} label="Run" value={m.rw} onChange={v => { const n = [...mis]; n[i] = { ...m, rw: v }; smis(n); }} />
@@ -767,23 +826,44 @@ export default function App() {
                   <WaveBar wave={wavs[aw]} t={t} missions={mis} waveIndex={aw} />
                   {wavs[aw].spawns.map((sp, si) => (
                     <div key={sp.id} style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 8, padding: 12, marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <Sel t={t} label="" value={sp.type} onChange={v => { const n = [...wavs]; n[aw].spawns[si] = { ...sp, type: v }; swavs(n); }}><option value="single">Single</option><option value="squad">Squad</option><option value="random">Random</option><option value="tank">Tank</option></Sel>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: isWsOpen(sp.id) ? 8 : 0 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1, minWidth: 0 }}>
+                          <button
+                            onClick={() => toggleWs(sp.id)}
+                            title={isWsOpen(sp.id) ? "Collapse" : "Expand"}
+                            style={{ ...btn2, padding: "4px 10px", fontSize: 12, flexShrink: 0, minWidth: 32 }}
+                          >
+                            {isWsOpen(sp.id) ? "▼" : "▶"}
+                          </button>
+                          <span style={{ fontWeight: 700, color: t.tx, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {spawnSummary(sp)}
+                          </span>
+                          {isWsOpen(sp.id) && (
+                            <Sel t={t} label="" value={sp.type} onChange={v => { const n = [...wavs]; n[aw].spawns[si] = { ...sp, type: v }; swavs(n); }}>
+                              <option value="single">Single</option>
+                              <option value="squad">Squad</option>
+                              <option value="random">Random</option>
+                              <option value="tank">Tank</option>
+                            </Sel>
+                          )}
                         </div>
-                        <div style={{ display: "flex", gap: 3 }}>
+                        <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
                           <button onClick={() => { if (si === 0) return; const n = [...wavs]; const s = [...n[aw].spawns]; [s[si-1], s[si]] = [s[si], s[si-1]]; n[aw] = { ...n[aw], spawns: s }; swavs(n); }} style={{ ...btnX, opacity: si === 0 ? 0.3 : 1 }}>{"\u25B2"}</button>
                           <button onClick={() => { const spawns = wavs[aw].spawns; if (si >= spawns.length - 1) return; const n = [...wavs]; const s = [...n[aw].spawns]; [s[si], s[si+1]] = [s[si+1], s[si]]; n[aw] = { ...n[aw], spawns: s }; swavs(n); }} style={{ ...btnX, opacity: si >= wavs[aw].spawns.length - 1 ? 0.3 : 1 }}>{"\u25BC"}</button>
                           <button onClick={() => { const n = [...wavs]; n[aw] = { ...n[aw], spawns: n[aw].spawns.filter((_, j) => j !== si) }; swavs(n); }} style={btnX}>X</button>
                         </div>
                       </div>
-                      {(() => {
+                      {isWsOpen(sp.id) && (() => {
                         const u = (k, v) => { const n = [...wavs]; n[aw].spawns[si] = { ...sp, [k]: v }; swavs(n); };
                         return (
                           <div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                               <Inp t={t} label="Name" value={sp.name} onChange={v => u("name", v)} type="text" width={110} />
-                              {sp.type !== "tank" && <Inp t={t} label="Where" value={sp.where} onChange={v => u("where", v)} type="text" width={120} />}
+                              {sp.type !== "tank" && (
+                              <Sel t={t} label="Spawn" value={resolveSpawn(g.map, sp.where)} onChange={v => u("where", v)} width={180}>
+                                {getSpawnsForMap(g.map).map(s => <option key={s} value={s}>{s}</option>)}
+                                </Sel>
+                              )}
                               <Inp t={t} label="$" value={sp.totalCurrency} onChange={v => u("totalCurrency", v)} />
                               <Inp t={t} label="WaitBefore" value={sp.waitBefore} onChange={v => u("waitBefore", v)} />
                             </div>
