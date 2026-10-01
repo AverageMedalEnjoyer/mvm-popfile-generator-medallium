@@ -45,7 +45,7 @@ Open `dist/index.html` directly in your browser. You can make a desktop shortcut
 - **Waves** — Unlimited waves with Single/Squad/RandomChoice/Tank wavespawns
 - **All Valve templates** — Verified against robot_standard.pop, robot_giant.pop, robot_gatebot.pop
 - **Editable previews** — Auto-generated code you can hand-edit for full control
-- **Save/Load Functionality** — Will save inside of the "mpc_medallium/saves" folder that is automatically created upon the EXE's launch.
+- **Save/Load Functionality** — Will save as a .pop inside of the "mpc_medallium/saves" folder that is automatically created upon the EXE's launch. Popfiles can be loaded directly from the saves folder, and even has support for official valve popfiles.
 - **Light/Dark mode**
 - Release includes a feature that can fix certain broken valve templates. Currently only used for fixing non-gatebot Heal-on-Kill Heavy, may remove it if unpopular or not necessary
 
