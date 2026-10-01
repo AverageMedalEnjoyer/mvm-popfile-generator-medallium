@@ -19,6 +19,7 @@
     "files": [
       "dist/**/*",
       "electron.cjs",
+      "preload.cjs",
       "icon.png"
     ],
     "win": {

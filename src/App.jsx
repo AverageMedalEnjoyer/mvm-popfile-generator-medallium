@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 import mapsText from "./mvm_maps.txt?raw";
 const MAPS = mapsText
@@ -27,6 +27,291 @@ function resolveSpawn(map, where) {
   if (opts.includes("spawnbot")) return "spawnbot";
   return opts[0];
 }
+
+
+
+// ---- Minimal .pop -> form parser (WaveSchedule / Mission / Wave / WaveSpawn) ----
+function stripQuotes(s) {
+  s = String(s || "").trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
+function tokenizePop(src) {
+  // Remove // comments (not inside strings — good enough for TF2 pops)
+  const noLine = String(src || "").replace(/\/\/[^\n]*/g, "");
+  const tokens = [];
+  let i = 0;
+  const n = noLine.length;
+  while (i < n) {
+    const c = noLine[i];
+    if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
+    if (c === "{" || c === "}") { tokens.push(c); i++; continue; }
+    if (c === '"') {
+      let j = i + 1;
+      let out = "";
+      while (j < n && noLine[j] !== '"') {
+        if (noLine[j] === "\\" && j + 1 < n) { out += noLine[j + 1]; j += 2; continue; }
+        out += noLine[j]; j++;
+      }
+      tokens.push(out);
+      i = j < n ? j + 1 : j;
+      continue;
+    }
+    let j = i;
+    while (j < n && !/[\s{}"]/.test(noLine[j])) j++;
+    tokens.push(noLine.slice(i, j));
+    i = j;
+  }
+  return tokens;
+}
+
+function parseBlock(tokens, start) {
+  // tokens[start] should be "{". Returns [object, indexAfterClosing]
+  const obj = { _kv: [], _blocks: [] }; // _kv: [key, valueString], _blocks: [name, childObj]
+  let i = start + 1;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (t === "}") return [obj, i + 1];
+    if (t === "{") {
+      // anonymous block — skip
+      const [, ni] = parseBlock(tokens, i);
+      i = ni;
+      continue;
+    }
+    const key = t;
+    const next = tokens[i + 1];
+    if (next === "{") {
+      const [child, ni] = parseBlock(tokens, i + 1);
+      obj._blocks.push([key, child]);
+      i = ni;
+    } else if (next === undefined || next === "}") {
+      // key with no value
+      obj._kv.push([key, ""]);
+      i += 1;
+    } else {
+      obj._kv.push([key, next]);
+      i += 2;
+    }
+  }
+  return [obj, i];
+}
+
+function kvMap(block) {
+  const m = {};
+  for (const [k, v] of block._kv) {
+    if (!(k in m)) m[k] = v; // first wins
+  }
+  return m;
+}
+
+function blocksNamed(block, name) {
+  return block._blocks.filter(([n]) => n === name).map(([, b]) => b);
+}
+
+function firstBlock(block, name) {
+  const list = blocksNamed(block, name);
+  return list.length ? list[0] : null;
+}
+
+function collectTemplates(block) {
+  const out = [];
+  for (const [name, child] of block._blocks) {
+    if (name === "TFBot") {
+      const m = kvMap(child);
+      if (m.Template) out.push(stripQuotes(m.Template));
+    } else if (name === "Squad" || name === "RandomChoice") {
+      out.push(...collectTemplates(child));
+    }
+  }
+  // also any nested under other names
+  return out;
+}
+
+function parseWaveSpawnBlock(spBlock) {
+  const m = kvMap(spBlock);
+  const sp = {
+    id: mkId(),
+    type: "single",
+    name: m.Name != null ? stripQuotes(m.Name) : "",
+    where: m.Where != null ? stripQuotes(m.Where) : "spawnbot",
+    totalCount: m.TotalCount != null ? Number(m.TotalCount) || 0 : 10,
+    maxActive: m.MaxActive != null ? Number(m.MaxActive) || 0 : 5,
+    spawnCount: m.SpawnCount != null ? Number(m.SpawnCount) || 0 : 2,
+    waitBefore: m.WaitBeforeStarting != null ? Number(m.WaitBeforeStarting) || 0 : 0,
+    waitBetween: (m.WaitBetweenSpawns != null ? Number(m.WaitBetweenSpawns) : (m.WaitBetweenSpawnsAfterDeath != null ? Number(m.WaitBetweenSpawnsAfterDeath) : 5)) || 0,
+    totalCurrency: m.TotalCurrency != null ? Number(m.TotalCurrency) || 0 : 100,
+    support: m.Support != null ? (String(m.Support).toLowerCase() === "limited" ? "limited" : (String(m.Support) === "1" || String(m.Support).toLowerCase() === "true" ? "1" : "none")) : "none",
+    waitDead: m.WaitForAllDead != null ? stripQuotes(m.WaitForAllDead) : "",
+    waitSpawned: m.WaitForAllSpawned != null ? stripQuotes(m.WaitForAllSpawned) : "",
+    bots: [makeBot()],
+    squadBots: [makeBot(), makeBot()],
+    randomBots: [makeBot(), makeBot()],
+    tank: { health: 30000, speed: 75, name: "Tank", path: "boss_path_1", skin: 0 },
+    override: "",
+  };
+
+  const tank = firstBlock(spBlock, "Tank");
+  if (tank) {
+    sp.type = "tank";
+    const tm = kvMap(tank);
+    sp.tank = {
+      health: tm.Health != null ? Number(tm.Health) || 30000 : 30000,
+      speed: tm.Speed != null ? Number(tm.Speed) || 75 : 75,
+      name: tm.Name != null ? stripQuotes(tm.Name) : "Tank",
+      path: tm.StartingPathTrackNode != null ? stripQuotes(tm.StartingPathTrackNode) : (tm.Path != null ? stripQuotes(tm.Path) : "boss_path_1"),
+      skin: tm.Skin != null ? Number(tm.Skin) || 0 : 0,
+    };
+    return sp;
+  }
+
+  const squad = firstBlock(spBlock, "Squad");
+  const random = firstBlock(spBlock, "RandomChoice");
+  if (squad) {
+    sp.type = "squad";
+    const tmpls = collectTemplates(squad);
+    sp.squadBots = (tmpls.length ? tmpls : ["Class Scout"]).map((tmpl) => {
+      const b = makeBot();
+      b.template = tmpl;
+      return b;
+    });
+    if (sp.squadBots.length < 1) sp.squadBots = [makeBot()];
+  } else if (random) {
+    sp.type = "random";
+    const tmpls = collectTemplates(random);
+    sp.randomBots = (tmpls.length ? tmpls : ["Class Scout", "Class Scout"]).map((tmpl) => {
+      const b = makeBot();
+      b.template = tmpl;
+      return b;
+    });
+    if (sp.randomBots.length < 2) sp.randomBots = [makeBot(), makeBot()];
+  } else {
+    sp.type = "single";
+    const tmpls = collectTemplates(spBlock);
+    const tmpl = tmpls[0] || "Class Scout";
+    const b = makeBot();
+    b.template = tmpl;
+    // skill from first TFBot if present
+    const tf = firstBlock(spBlock, "TFBot");
+    if (tf) {
+      const tkm = kvMap(tf);
+      if (tkm.Skill) b.skill = stripQuotes(tkm.Skill);
+    }
+    sp.bots = [b];
+  }
+  return sp;
+}
+
+function parsePop(text) {
+  const tokens = tokenizePop(text);
+  // Find WaveSchedule {
+  let wsIdx = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === "WaveSchedule" && tokens[i + 1] === "{") {
+      wsIdx = i + 1;
+      break;
+    }
+  }
+  if (wsIdx < 0) {
+    return null;
+  }
+  const [root] = parseBlock(tokens, wsIdx);
+  const top = kvMap(root);
+
+  const g = {
+    money: top.StartingCurrency != null ? Number(top.StartingCurrency) || 800 : 800,
+    respawn: top.RespawnWaveTime != null ? Number(top.RespawnWaveTime) || 6 : 6,
+    attack: top.CanBotsAttackWhileInSpawnRoom != null ? stripQuotes(top.CanBotsAttackWhileInSpawnRoom) : "no",
+    adv: top.Advanced != null ? Number(top.Advanced) || 1 : 1,
+    map: "mvm_coaltown",
+    extra: "",
+  };
+
+  const mis = blocksNamed(root, "Mission").map((mb) => {
+    const m = kvMap(mb);
+    const tf = firstBlock(mb, "TFBot");
+    const tm = tf ? kvMap(tf) : {};
+    return {
+      id: mkId(),
+      obj: m.Objective != null ? stripQuotes(m.Objective) : "DestroySentries",
+      ic: m.InitialCooldown != null ? Number(m.InitialCooldown) || 0 : 0,
+      where: m.Where != null ? stripQuotes(m.Where) : "spawnbot",
+      bw: m.BeginAtWave != null ? Number(m.BeginAtWave) || 1 : 1,
+      rw: m.RunForThisManyWaves != null ? Number(m.RunForThisManyWaves) || 1 : 1,
+      ct: m.CooldownTime != null ? Number(m.CooldownTime) || 0 : 0,
+      dc: m.DesiredCount != null ? Number(m.DesiredCount) || 1 : 1,
+      tmpl: tm.Template != null ? stripQuotes(tm.Template) : "T_TFBot_SentryBuster",
+      skill: tm.Skill != null ? stripQuotes(tm.Skill) : "",
+    };
+  });
+
+  const wavs = blocksNamed(root, "Wave").map((wb) => {
+    const spawns = blocksNamed(wb, "WaveSpawn").map(parseWaveSpawnBlock);
+    return {
+      id: mkId(),
+      spawns: spawns.length ? spawns : [makeWS()],
+    };
+  });
+
+  return {
+    g,
+    mis,
+    wavs: wavs.length ? wavs : [{ id: mkId(), spawns: [makeWS()] }],
+  };
+}
+
+// ---- File system bridge (Electron via window.mpcFs, browser fallback via localStorage) ----
+const SAVES_PREFIX = "mpc_save_";
+
+async function mpcEnsureDirs() {
+  if (window.mpcFs && typeof window.mpcFs.ensureDirs === "function") {
+    return window.mpcFs.ensureDirs();
+  }
+  // Browser / no bridge: nothing to create on disk
+  return true;
+}
+
+async function mpcListSaves() {
+  if (window.mpcFs && typeof window.mpcFs.listSaves === "function") {
+    return window.mpcFs.listSaves();
+  }
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(SAVES_PREFIX)) out.push(k.slice(SAVES_PREFIX.length));
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+async function mpcWriteSave(filename, content) {
+  if (window.mpcFs && typeof window.mpcFs.writeSave === "function") {
+    return window.mpcFs.writeSave(filename, content);
+  }
+  localStorage.setItem(SAVES_PREFIX + filename, content);
+  return true;
+}
+
+async function mpcReadSave(filename) {
+  if (window.mpcFs && typeof window.mpcFs.readSave === "function") {
+    return window.mpcFs.readSave(filename);
+  }
+  return localStorage.getItem(SAVES_PREFIX + filename);
+}
+
+function sanitizePopName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/[^\w\-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64) || "Untitled";
+}
+
+function saveFilename(map, popName) {
+  return map + "_" + sanitizePopName(popName) + ".pop";
+}
+
 
 function botLabel(tmpl) {
   if (!tmpl) return "?";
@@ -584,82 +869,399 @@ export default function App() {
   const [wsOpen, setWsOpen] = useState({});
   const isWsOpen = (id) => !!wsOpen[id];
   const toggleWs = (id) => setWsOpen((o) => ({ ...o, [id]: !o[id] }));
- 
+
+  // File session
+  const [fileOpen, setFileOpen] = useState(false);
+  const [popName, setPopName] = useState("");
+  const [popOverride, setPopOverride] = useState(null); // raw .pop text when loaded/edited; null = use genPop
+  const [previewEditing, setPreviewEditing] = useState(false);
+  const [previewDraft, setPreviewDraft] = useState("");
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [loadOpen, setLoadOpen] = useState(false);
+  const [saveList, setSaveList] = useState([]);
+  const [loadConfirm, setLoadConfirm] = useState(null); // filename pending confirm
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [fsReady, setFsReady] = useState(false);
+  const [toast, setToast] = useState("");
+  const previewWrapRef = useRef(null);
+  const filesMenuRef = useRef(null);
+
   const t = lm ? light : dark;
   const btn = { background: t.ac, color: "#fff", border: "none", borderRadius: 4, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontWeight: 700 };
   const btn2 = { ...btn, background: t.bd, color: t.tx };
   const btnX = { ...btn, background: "#6b1c1c", padding: "4px 10px", fontSize: 11 };
- 
+
   const allNames = wavs.flatMap(w => w.spawns.map(s => s.name)).filter(Boolean);
-  const pf = genPop(g, mis, wavs, cust);
+  const generatedPf = genPop(g, mis, wavs, cust);
+  const pf = popOverride != null ? popOverride : generatedPf;
   const wm = wavs[aw] ? wavs[aw].spawns.reduce((s, sp) => s + sp.totalCurrency, 0) : 0;
- 
-  function dl(ext) {
-    const b = new Blob([pf], { type: "text/plain" });
-    const u = URL.createObjectURL(b);
-    const a = document.createElement("a");
-    a.href = u;
-    a.download = g.map + "_custom." + ext;
-    a.click();
-  }
- 
-  function saveProject() {
-    const data = JSON.stringify({ g, mis, wavs, cust }, null, 2);
-    const b = new Blob([data], { type: "application/json" });
-    const u = URL.createObjectURL(b);
-    const a = document.createElement("a");
-    a.href = u;
-    a.download = g.map + "_project.json";
-    a.click();
-  }
- 
-  function loadProject() {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        try {
-          const data = JSON.parse(ev.target.result);
-          if (data.g) sg(data.g);
-          if (data.mis) smis(data.mis);
-          if (data.wavs) { swavs(data.wavs); saw(0); }
-          if (data.cust) scust(data.cust);
-        } catch (err) {
-          alert("Failed to load project: " + err.message);
+
+  // Create mpc_medallium (+ saves) on startup; warn if Electron bridge is missing
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!window.mpcFs) {
+          console.warn(
+            "[mpc] window.mpcFs is missing. preload.cjs was not loaded. " +
+            "Saves will use localStorage only (not disk). Rebuild with preload.cjs in package.json build.files."
+          );
+        } else {
+          const info = await mpcEnsureDirs();
+          console.log("[mpc] dirs ready", info);
         }
-      };
-      reader.readAsText(file);
-    };
-    input.click();
+      } catch (e) {
+        console.warn("ensureDirs:", e);
+      }
+      if (!cancelled) setFsReady(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Close menus / cancel preview edit on outside click
+  useEffect(() => {
+    function onDoc(e) {
+      if (filesMenuRef.current && !filesMenuRef.current.contains(e.target)) {
+        setFilesOpen(false);
+        setLoadOpen(false);
+      }
+      if (previewEditing && previewWrapRef.current && !previewWrapRef.current.contains(e.target)) {
+        setPreviewEditing(false);
+        setPreviewDraft("");
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [previewEditing]);
+
+  function showToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2500);
   }
- 
+
+  async function refreshSaveList() {
+    try {
+      const list = await mpcListSaves();
+      setSaveList(list.filter((f) => String(f).toLowerCase().endsWith(".pop")));
+    } catch (e) {
+      console.warn(e);
+      setSaveList([]);
+    }
+  }
+
+  function resetProjectDefaults() {
+    sg({ money: 800, respawn: 6, attack: "no", adv: 1, map: "mvm_coaltown", extra: "" });
+    smis([{ id: mkId(), obj: "DestroySentries", ic: 20, where: "spawnbot", bw: 1, rw: 7, ct: 20, dc: 1, tmpl: "T_TFBot_SentryBuster" }]);
+    swavs([{ id: mkId(), spawns: [makeWS()] }]);
+    scust([]);
+    saw(0);
+    stab("waves");
+    setWsOpen({});
+    setPopOverride(null);
+    setPreviewEditing(false);
+    setPreviewDraft("");
+    sprev(false);
+  }
+
+  function createNewPop() {
+    const name = sanitizePopName(createName);
+    if (!name) {
+      alert("Please enter a name for the pop file.");
+      return;
+    }
+    resetProjectDefaults();
+    setPopName(name);
+    setFileOpen(true);
+    setCreateOpen(false);
+    setCreateName("");
+    setFilesOpen(false);
+    showToast("Created " + name);
+  }
+
+  async function saveCurrentPop() {
+    if (!fileOpen || !popName) {
+      alert("No pop file is open.");
+      return;
+    }
+    const filename = saveFilename(g.map, popName);
+    const content = pf;
+    try {
+      await mpcEnsureDirs();
+      const result = await mpcWriteSave(filename, content);
+      const where = window.mpcFs
+        ? (result && result.path ? result.path : filename)
+        : ("localStorage (no disk bridge): " + filename);
+      showToast("Saved " + where);
+      setFilesOpen(false);
+    } catch (e) {
+      alert("Failed to save: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  async function openLoadMenu() {
+    await refreshSaveList();
+    setLoadOpen(true);
+    setFilesOpen(true);
+  }
+
+  function requestLoad(filename) {
+    setLoadConfirm(filename);
+    setLoadOpen(false);
+  }
+
+  async function confirmLoadYes() {
+    const filename = loadConfirm;
+    setLoadConfirm(null);
+    if (!filename) return;
+    try {
+      const content = await mpcReadSave(filename);
+      if (content == null || content === "") {
+        alert("Could not read " + filename);
+        return;
+      }
+      const raw = String(content);
+
+      // Derive display name + map from filename: mvm_coaltown_Name.pop -> map + Name
+      let display = filename.replace(/\.pop$/i, "");
+      let loadedMap = null;
+      for (const m of MAPS) {
+        if (display.startsWith(m + "_")) {
+          loadedMap = m;
+          display = display.slice(m.length + 1);
+          break;
+        }
+      }
+
+      // Parse .pop into form state (waves, missions, globals)
+      const parsed = parsePop(raw);
+      if (parsed) {
+        const nextG = {
+          ...parsed.g,
+          map: loadedMap || parsed.g.map || g.map,
+        };
+        // Normalize spawns for the map
+        nextG.map = MAPS.includes(nextG.map) ? nextG.map : (MAPS[0] || "mvm_coaltown");
+        const fixedMis = (parsed.mis || []).map((m) => ({
+          ...m,
+          where: resolveSpawn(nextG.map, m.where),
+        }));
+        const fixedWavs = (parsed.wavs || []).map((w) => ({
+          ...w,
+          spawns: (w.spawns || []).map((sp) => ({
+            ...sp,
+            where: resolveSpawn(nextG.map, sp.where),
+          })),
+        }));
+        sg(nextG);
+        smis(fixedMis.length ? fixedMis : []);
+        swavs(fixedWavs.length ? fixedWavs : [{ id: mkId(), spawns: [makeWS()] }]);
+        saw(0);
+        setWsOpen({});
+      }
+
+      setPopName(sanitizePopName(display) || "Loaded");
+      // If we parsed into the form, drop the raw override so Waves/Missions drive
+      // Preview + Save. If parse failed, keep the raw text in Preview only.
+      setPopOverride(parsed ? null : raw);
+      setFileOpen(true);
+      setPreviewEditing(false);
+      setPreviewDraft("");
+      sprev(true);
+      setFilesOpen(false);
+      showToast(parsed
+        ? ("Loaded " + filename + " into form")
+        : ("Loaded " + filename + " (preview only — could not parse WaveSchedule)"));
+    } catch (e) {
+      alert("Failed to load: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  function startPreviewEdit() {
+    setPreviewDraft(pf);
+    setPreviewEditing(true);
+  }
+
+  function savePreviewEdit() {
+    setPopOverride(previewDraft);
+    setPreviewEditing(false);
+    setPreviewDraft("");
+    showToast("Preview changes saved");
+  }
+
+  function cancelPreviewEdit() {
+    setPreviewEditing(false);
+    setPreviewDraft("");
+  }
+
+
   return (
     <div style={{ background: t.bg, color: t.tx, fontFamily: "system-ui, sans-serif", minHeight: "100vh" }}>
       <style>{`* { box-sizing: border-box; } button:hover { filter: brightness(1.15); } select { cursor: pointer; } ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }`}</style>
  
       <div style={{ borderBottom: "2px solid " + t.ac, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: t.ac, letterSpacing: 2, textTransform: "uppercase" }}>MvM Popfile Creator: Medallium</h1>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => slm(!lm)} style={{ ...btn2, fontSize: 16, padding: "4px 10px" }}>{lm ? "\uD83C\uDF19" : "\u2600\uFE0F"}</button>
-          <button onClick={loadProject} style={btn2}>Load</button>
-          <button onClick={saveProject} style={btn2}>Save</button>
-          <button onClick={() => sprev(!prev)} style={{ ...btn, background: prev ? t.ac : t.bd, color: prev ? "#fff" : t.tx }}>{prev ? "Editor" : "Preview"}</button>
-          <button onClick={() => dl("pop")} style={btn}>.pop</button>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: t.ac, letterSpacing: 1.5, textTransform: "uppercase" }}>
+          MvM Popfile Creator: Medallium{fileOpen && popName ? " (" + popName + ")" : ""}
+        </h1>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={() => slm(!lm)} style={{ ...btn2, fontSize: 16, padding: "4px 10px" }} title="Toggle theme">{lm ? "\uD83C\uDF19" : "\u2600\uFE0F"}</button>
+          <button
+            onClick={() => { if (!fileOpen) { sprev(true); return; } sprev(!prev); }}
+            style={{ ...btn, background: prev ? t.ac : t.bd, color: prev ? "#fff" : t.tx }}
+          >
+            {prev ? "Editor" : "Preview"}
+          </button>
         </div>
       </div>
- 
+
+      {toast && (
+        <div style={{ position: "fixed", bottom: 20, right: 20, background: t.ac, color: "#111", padding: "10px 16px", borderRadius: 8, fontWeight: 700, fontSize: 13, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.4)" }}>
+          {toast}
+        </div>
+      )}
+
+      {/* Create New dialog */}
+      {createOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9000 }}>
+          <div style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 10, padding: 20, width: 360, maxWidth: "90vw" }}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: t.ac }}>Create New Pop File</div>
+            <label style={{ fontSize: 11, color: t.txd, textTransform: "uppercase", fontWeight: 700 }}>Name</label>
+            <input
+              autoFocus
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") createNewPop(); if (e.key === "Escape") setCreateOpen(false); }}
+              placeholder="e.g. BucketsAndBolts"
+              style={{ width: "100%", marginTop: 4, marginBottom: 14, background: t.ib, color: t.it, border: "1px solid " + t.ibd, borderRadius: 4, padding: "8px 10px", fontSize: 14, fontFamily: "monospace" }}
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setCreateOpen(false)} style={btn2}>Cancel</button>
+              <button onClick={createNewPop} style={btn}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Load confirm dialog */}
+      {loadConfirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9000 }}>
+          <div style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 10, padding: 20, width: 400, maxWidth: "90vw" }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8, color: t.tx }}>Do you want to load this .pop?</div>
+            <div style={{ fontFamily: "monospace", fontSize: 13, color: t.ac, marginBottom: 16, wordBreak: "break-all" }}>{loadConfirm}</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setLoadConfirm(null)} style={btn2}>No</button>
+              <button onClick={confirmLoadYes} style={btn}>Yes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {prev ? (
-        <pre style={{ margin: 16, background: t.ci, border: "1px solid " + t.bd, borderRadius: 8, padding: 16, fontSize: 12, fontFamily: "monospace", color: t.tx, overflow: "auto", maxHeight: "80vh", whiteSpace: "pre" }}>{pf}</pre>
+        <div ref={previewWrapRef} style={{ margin: 16 }}>
+          {!fileOpen ? (
+            <div style={{ background: t.ci, border: "1px solid " + t.bd, borderRadius: 8, padding: 40, textAlign: "center", color: t.txd, fontSize: 14 }}>
+              No .pop file open
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                {!previewEditing ? (
+                  <button onClick={startPreviewEdit} style={btn2}>Edit</button>
+                ) : (
+                  <>
+                    <button onClick={savePreviewEdit} style={btn}>Save</button>
+                    <button onClick={cancelPreviewEdit} style={btn2}>Cancel</button>
+                    <span style={{ fontSize: 12, color: t.txd }}>Editing preview — click outside to cancel</span>
+                  </>
+                )}
+                {popOverride != null && !previewEditing && (
+                  <button onClick={() => { setPopOverride(null); showToast("Using form-generated pop"); }} style={{ ...btn2, fontSize: 11 }}>Reset to form-generated</button>
+                )}
+              </div>
+              {previewEditing ? (
+                <textarea
+                  value={previewDraft}
+                  onChange={(e) => setPreviewDraft(e.target.value)}
+                  style={{ width: "100%", minHeight: "70vh", background: t.ci, border: "1px solid " + t.ac, borderRadius: 8, padding: 16, fontSize: 12, fontFamily: "monospace", color: t.tx, resize: "vertical", whiteSpace: "pre" }}
+                />
+              ) : (
+                <pre style={{ margin: 0, background: t.ci, border: "1px solid " + t.bd, borderRadius: 8, padding: 16, fontSize: 12, fontFamily: "monospace", color: t.tx, overflow: "auto", maxHeight: "80vh", whiteSpace: "pre" }}>{pf}</pre>
+              )}
+            </>
+          )}
+        </div>
+      ) : !fileOpen ? (
+        <div style={{ padding: 16 }}>
+          <div style={{ display: "flex", gap: 2, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }} ref={filesMenuRef}>
+            <div style={{ position: "relative" }}>
+              <button onClick={() => { setFilesOpen(!filesOpen); setLoadOpen(false); }} style={{ ...btn, background: filesOpen ? t.ac : t.card, color: filesOpen ? "#fff" : t.tx, borderRadius: "6px 6px 0 0", padding: "8px 16px", border: "1px solid " + t.bd }}>
+                Files ▾
+              </button>
+              {filesOpen && (
+                <div style={{ position: "absolute", top: "100%", left: 0, background: t.card, border: "1px solid " + t.bd, borderRadius: 6, minWidth: 200, zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,0.45)", overflow: "hidden" }}>
+                  <button onClick={() => { setCreateOpen(true); setFilesOpen(false); }} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "10px 14px", cursor: "pointer", fontSize: 13 }}>
+                    Create New Pop File
+                  </button>
+                  <button onClick={openLoadMenu} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "10px 14px", cursor: "pointer", fontSize: 13, borderTop: "1px solid " + t.bd }}>
+                    Load ▸
+                  </button>
+                  {loadOpen && (
+                    <div style={{ borderTop: "1px solid " + t.bd, maxHeight: 240, overflow: "auto", background: t.ci }}>
+                      {saveList.length === 0 && (
+                        <div style={{ padding: "10px 14px", color: t.txd, fontSize: 12 }}>No .pop files in saves/</div>
+                      )}
+                      {saveList.map((f) => (
+                        <button key={f} onClick={() => requestLoad(f)} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "8px 14px", cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <div style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 8, padding: 48, textAlign: "center", color: t.txd }}>
+            <div style={{ fontSize: 16, marginBottom: 8 }}>No .pop file open</div>
+            <div style={{ fontSize: 13 }}>Use <b style={{ color: t.ac }}>Files</b> to create a new pop or load one from mpc_medallium/saves</div>
+          </div>
+        </div>
       ) : (
         <div style={{ padding: 16 }}>
-          <div style={{ display: "flex", gap: 2, marginBottom: 12, flexWrap: "wrap" }}>
-            {["globals", "missions", "bots", "waves"].map(tb => (
+          <div style={{ display: "flex", gap: 2, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ position: "relative" }} ref={filesMenuRef}>
+              <button onClick={() => { setFilesOpen(!filesOpen); setLoadOpen(false); }} style={{ ...btn, background: filesOpen ? t.ac : t.card, color: filesOpen ? "#fff" : t.tx, borderRadius: "6px 6px 0 0", padding: "8px 16px", border: "1px solid " + t.bd }}>
+                Files ▾
+              </button>
+              {filesOpen && (
+                <div style={{ position: "absolute", top: "100%", left: 0, background: t.card, border: "1px solid " + t.bd, borderRadius: 6, minWidth: 220, zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,0.45)", overflow: "hidden" }}>
+                  <button onClick={() => { setCreateOpen(true); setFilesOpen(false); }} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "10px 14px", cursor: "pointer", fontSize: 13 }}>
+                    Create New Pop File
+                  </button>
+                  <button onClick={openLoadMenu} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "10px 14px", cursor: "pointer", fontSize: 13, borderTop: "1px solid " + t.bd }}>
+                    Load ▸
+                  </button>
+                  {loadOpen && (
+                    <div style={{ borderTop: "1px solid " + t.bd, maxHeight: 240, overflow: "auto", background: t.ci }}>
+                      {saveList.length === 0 && (
+                        <div style={{ padding: "10px 14px", color: t.txd, fontSize: 12 }}>No .pop files in saves/</div>
+                      )}
+                      {saveList.map((f) => (
+                        <button key={f} onClick={() => requestLoad(f)} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "8px 14px", cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button onClick={saveCurrentPop} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.tx, padding: "10px 14px", cursor: "pointer", fontSize: 13, borderTop: "1px solid " + t.bd }}>
+                    Save
+                  </button>
+                </div>
+              )}
+            </div>
+            {["waves", "missions", "bots", "globals"].map(tb => (
               <button key={tb} onClick={() => stab(tb)} style={{ ...btn, background: tab === tb ? t.ac : t.card, color: tab === tb ? "#fff" : t.tx, borderRadius: "6px 6px 0 0", padding: "8px 16px", border: "1px solid " + t.bd }}>
-                {tb === "globals" ? "Settings" : tb === "missions" ? "Missions" : tb === "bots" ? "Bot Creator (" + cust.length + ")" : "Waves (" + wavs.length + ")"}
+                {tb === "globals" ? "Settings" : tb === "missions" ? "Mission" : tb === "bots" ? "Bot Creator (" + cust.length + ")" : "Wave (" + wavs.length + ")"}
               </button>
             ))}
           </div>
