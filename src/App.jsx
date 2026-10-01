@@ -830,6 +830,68 @@ function BotDropdown({ t, value, onChange, customBots }) {
     </div>
   );
 }
+
+function ClassIconDropdown({ t, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  
+  // Extract all unique icon keys from ICON_MAP
+  const allIcons = Object.keys(ICON_MAP).map(k => ICON_MAP[k]).reduce((acc, path) => {
+    // Find keys matching this path or build a clean list from ICON_MAP entries
+    return acc;
+  }, []);
+
+  const iconEntries = Object.entries(ICON_MAP).map(([tmpl, path]) => {
+    // Derive a clean icon token name from the path or key
+    const iconName = path.replace(IC, "").replace(".png", "");
+    return { val: iconName, path };
+  });
+
+  // Deduplicate by icon filename token
+  const uniqueIcons = [];
+  const seenPaths = new Set();
+  for (const entry of iconEntries) {
+    if (!seenPaths.has(entry.path)) {
+      seenPaths.add(entry.path);
+      uniqueIcons.push(entry);
+    }
+  }
+
+  const filtered = search 
+    ? uniqueIcons.filter(it => it.val.toLowerCase().includes(search.toLowerCase()))
+    : uniqueIcons;
+
+  const currentPath = value ? IC + value + ".png" : null;
+
+  return (
+    <div style={{ position: "relative", minWidth: 180 }}>
+      <div onClick={() => setOpen(!open)} style={{ background: t.ib, border: "1px solid " + t.ibd, borderRadius: 4, padding: "5px 8px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontFamily: "monospace", color: t.it }}>
+        {currentPath ? <img src={currentPath} alt="" style={{ width: 20, height: 20, imageRendering: "pixelated", onError: (e) => { e.target.style.display = 'none'; } }} /> : <span style={{ fontSize: 14, fontWeight: 900, color: t.txd, lineHeight: 1 }}>?</span>}
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value || "Select icon..."}</span>
+        <span style={{ fontSize: 10, opacity: 0.5 }}>{open ? "\u25B2" : "\u25BC"}</span>
+      </div>
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 999, background: t.ib, border: "1px solid " + t.ibd, borderRadius: "0 0 4px 4px", maxHeight: 250, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }}>
+          <div style={{ position: "sticky", top: 0, background: t.ib, padding: 4, borderBottom: "1px solid " + t.ibd }}>
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Search icon..." style={{ width: "100%", background: t.bg, color: t.it, border: "1px solid " + t.ibd, borderRadius: 3, padding: "4px 6px", fontSize: 12, fontFamily: "monospace", outline: "none" }} />
+          </div>
+          <div onClick={() => { onChange(""); setOpen(false); setSearch(""); }} style={{ padding: "4px 8px", cursor: "pointer", fontSize: 12, fontFamily: "monospace", color: t.txd, borderBottom: "1px solid " + t.ibd }}>
+            (None / Default)
+          </div>
+          {filtered.map(it => (
+            <div key={it.val} onClick={() => { onChange(it.val); setOpen(false); setSearch(""); }}
+              style={{ padding: "4px 8px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontFamily: "monospace", color: t.it, background: it.val === value ? (t.bg === "#0a0a0a" ? "#222" : "#e8e4df") : "transparent" }}
+              onMouseEnter={e => { e.currentTarget.style.background = t.bg === "#0a0a0a" ? "#1a1a1a" : "#ede9e4"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = it.val === value ? (t.bg === "#0a0a0a" ? "#222" : "#e8e4df") : "transparent"; }}>
+              <img src={it.path} alt="" style={{ width: 18, height: 18, imageRendering: "pixelated" }} />
+              <span>{it.val}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
  
 function BotPicker({ t, bot, onChange, label, attrList, customBots }) {
   const isCl = bot.template.startsWith("Class ");
@@ -1459,7 +1521,10 @@ export default function App() {
                       <Sel t={t} label="Skill" value={c.skill} onChange={v => uc("skill", v)}>{SKILLS.map(x => <option key={x}>{x}</option>)}</Sel>
                       <Inp t={t} label="Health" value={c.health} onChange={v => uc("health", v)} type="text" width={70} />
                       <Inp t={t} label="Scale" value={c.scale} onChange={v => uc("scale", v)} type="text" width={60} />
-                      <Inp t={t} label="ClassIcon" value={c.icon} onChange={v => uc("icon", v)} type="text" width={140} />
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <label style={{ fontSize: 10, color: t.txd, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 700 }}>ClassIcon</label>
+                        <ClassIconDropdown t={t} value={c.icon} onChange={v => uc("icon", v)} />
+                      </div>
                       <Inp t={t} label="MaxVision" value={c.mvr} onChange={v => uc("mvr", v)} type="text" width={80} />
                       <Sel t={t} label="WeaponRestrictions" value={c.wr} onChange={v => uc("wr", v)}><option value="">None</option><option>PrimaryOnly</option><option>SecondaryOnly</option><option>MeleeOnly</option></Sel>
                       <Sel t={t} label="BehaviorModifiers" value={c.bm} onChange={v => uc("bm", v)}><option value="">None</option><option>Mobber</option><option>Push</option></Sel>
