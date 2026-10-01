@@ -576,7 +576,26 @@ function makeBot() {
   return { id: mkId(), template: "Class Scout", skill: "Hard", attributes: [] };
 }
 function makeWS() {
-  return { id: mkId(), name: "", where: "spawnbot", totalCount: 20, maxActive: 8, spawnCount: 4, waitBefore: 0, waitBetween: 8, totalCurrency: 100, waitDead: "", waitSpawned: "", support: "none", type: "single", bots: [makeBot()], squadBots: [makeBot()], randomBots: [makeBot(), makeBot()], tank: { health: 20000, speed: 75, name: "tankboss", skin: 0, path: "boss_path_a1" }, override: "" };
+  return { 
+    id: mkId(), 
+    name: "", 
+    where: "spawnbot", 
+    totalCount: 20, 
+    maxActive: 8, 
+    spawnCount: 4, 
+    waitBefore: 0, 
+    waitBetween: 8, 
+    totalCurrency: 100, 
+    waitDead: "", 
+    waitSpawned: "", 
+    support: "none", 
+    type: "single", 
+    bots: [makeBot()], 
+    squadBots: [makeBot()], 
+    randomBots: [makeBot(), makeBot()], 
+    tank: { health: 20000, speed: 75, name: "tankboss", skin: 0, path: "boss_path_a1" }, 
+    override: "" 
+  };
 }
 function makeCustomBot() {
   return { id: mkId(), tName: "MyCustomBot", cls: "Scout", dName: "Custom Bot", skill: "Hard", health: "", scale: "", icon: "", wr: "", bm: "", mvr: "", items: [""], attrs: [], cAttrs: [{ k: "", v: "" }], iAttrs: [{ item: "", rows: [{ k: "", v: "" }] }], override: "" };
@@ -634,9 +653,16 @@ function genBotCode(b, ind) {
  
 function genWSCode(sp) {
   const L = ["WaveSpawn", "{"];
-  if (sp.name) L.push('    Name "' + sp.name + '"');
-  if (sp.waitDead) L.push('    WaitForAllDead "' + sp.waitDead + '"');
-  if (sp.waitSpawned) L.push('    WaitForAllSpawned "' + sp.waitSpawned + '"');
+  if (sp.name && String(sp.name).trim()) {
+    L.push('    Name "' + String(sp.name).trim() + '"');
+  }
+  if (sp.waitDead && String(sp.waitDead).trim()) {
+    L.push('    WaitForAllDead "' + String(sp.waitDead).trim() + '"');
+  }
+  if (sp.waitSpawned && String(sp.waitSpawned).trim()) {
+    L.push('    WaitForAllSpawned "' + String(sp.waitSpawned).trim() + '"');
+  }
+  
   if (sp.type === "tank") {
     const k = sp.fromTank && sp.tankKeep ? sp.tankKeep : { total: 1, max: 1, spawn: 1, between: 0 };
     L.push("    TotalCount " + k.total, "    MaxActive " + k.max, "    SpawnCount " + k.spawn, "    WaitBeforeStarting " + sp.waitBefore, "    WaitBetweenSpawns " + k.between, "    TotalCurrency " + sp.totalCurrency);
@@ -980,7 +1006,8 @@ export default function App() {
   const btn2 = { ...btn, background: t.bd, color: t.tx };
   const btnX = { ...btn, background: "#6b1c1c", padding: "4px 10px", fontSize: 11 };
 
-  const allNames = wavs.flatMap(w => w.spawns.map(s => s.name)).filter(Boolean);
+  const currentWaveSpawns = wavs[aw] ? wavs[aw].spawns : [];
+  const allNames = currentWaveSpawns.map(s => s.name).filter(Boolean);
   const generatedPf = genPop(g, mis, wavs, cust);
   const pf = popOverride != null ? popOverride : generatedPf;
   const wm = wavs[aw] ? wavs[aw].spawns.reduce((s, sp) => s + sp.totalCurrency, 0) : 0;
