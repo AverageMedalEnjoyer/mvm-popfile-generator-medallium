@@ -44,4 +44,3 @@ This creates a portable .exe in the `release` folder. No installation needed —
 - Possibly add custom icon support (? need to read VTFs to make the feature more useful, otherwise users just put their custom icons as pngs into the program) 
 - UI could probably use work
 - Improve relationship between editable preview of bot templates and wavespawns and their GUI counterparts
-- make it skip saving as json and save as pop directly, create a popfile parser for existing pops (Deal with issue of plugin-only keyvalues?)
