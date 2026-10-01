@@ -4,7 +4,7 @@ Heavily editted version of Consulcast Gaming's MVM Popfile Creator. Though this 
 
 ## Build as Desktop App (.exe)
 
-### Option A: Portable .exe (recommended)
+### Portable .exe
 
 ```
 npm install
