@@ -40,29 +40,30 @@ function stripQuotes(s) {
 }
 
 function tokenizePop(src) {
-  // Remove // comments (not inside strings — good enough for TF2 pops)
-  const noLine = String(src || "").replace(/\/\/[^\n]*/g, "");
+  // Comment-aware tokenizer: "//" only starts a comment outside of quoted strings
+  const text = String(src || "");
   const tokens = [];
   let i = 0;
-  const n = noLine.length;
+  const n = text.length;
   while (i < n) {
-    const c = noLine[i];
+    const c = text[i];
     if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
+    if (c === "/" && text[i + 1] === "/") { while (i < n && text[i] !== "\n") i++; continue; }
     if (c === "{" || c === "}") { tokens.push(c); i++; continue; }
     if (c === '"') {
       let j = i + 1;
       let out = "";
-      while (j < n && noLine[j] !== '"') {
-        if (noLine[j] === "\\" && j + 1 < n) { out += noLine[j + 1]; j += 2; continue; }
-        out += noLine[j]; j++;
+      while (j < n && text[j] !== '"') {
+        if (text[j] === "\\" && j + 1 < n) { out += text[j + 1]; j += 2; continue; }
+        out += text[j]; j++;
       }
       tokens.push(out);
       i = j < n ? j + 1 : j;
       continue;
     }
     let j = i;
-    while (j < n && !/[\s{}"]/.test(noLine[j])) j++;
-    tokens.push(noLine.slice(i, j));
+    while (j < n && !/[\s{}"]/.test(text[j]) && !(text[j] === "/" && text[j + 1] === "/")) j++;
+    tokens.push(text.slice(i, j));
     i = j;
   }
   return tokens;
@@ -70,14 +71,14 @@ function tokenizePop(src) {
 
 function parseBlock(tokens, start) {
   // tokens[start] should be "{". Returns [object, indexAfterClosing]
-  const obj = { _kv: [], _blocks: [] }; // _kv: [key, valueString], _blocks: [name, childObj]
+  // _kv: [key, value], _blocks: [name, child], _seq: every entry in original order
+  const obj = { _kv: [], _blocks: [], _seq: [] };
   let i = start + 1;
   while (i < tokens.length) {
     const t = tokens[i];
     if (t === "}") return [obj, i + 1];
     if (t === "{") {
-      // anonymous block — skip
-      const [, ni] = parseBlock(tokens, i);
+      const [, ni] = parseBlock(tokens, i); // anonymous block — skip
       i = ni;
       continue;
     }
@@ -86,13 +87,15 @@ function parseBlock(tokens, start) {
     if (next === "{") {
       const [child, ni] = parseBlock(tokens, i + 1);
       obj._blocks.push([key, child]);
+      obj._seq.push({ k: key, child });
       i = ni;
     } else if (next === undefined || next === "}") {
-      // key with no value
       obj._kv.push([key, ""]);
+      obj._seq.push({ k: key, v: "" });
       i += 1;
     } else {
       obj._kv.push([key, next]);
+      obj._seq.push({ k: key, v: next });
       i += 2;
     }
   }
@@ -116,33 +119,88 @@ function firstBlock(block, name) {
   return list.length ? list[0] : null;
 }
 
-function collectTemplates(block) {
-  const out = [];
-  for (const [name, child] of block._blocks) {
-    if (name === "TFBot") {
-      const m = kvMap(child);
-      if (m.Template) out.push(stripQuotes(m.Template));
-    } else if (name === "Squad" || name === "RandomChoice") {
-      out.push(...collectTemplates(child));
+const numOr = (v, d) => (v != null && v !== "" && !isNaN(Number(v)) ? Number(v) : d);
+
+function quoteIfNeeded(v) {
+  v = String(v == null ? "" : v);
+  if (v === "" || /[\s"{}]|\/\//.test(v)) return '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  return v;
+}
+
+// Write a parsed block back out as pop-file lines, in original order.
+// skip(key, isBlock) -> true to leave an entry out (because the form handles it itself).
+function serializeSeq(block, ind, skip) {
+  const p = " ".repeat(ind);
+  const L = [];
+  for (const e of block._seq) {
+    if (skip && skip(e.k, !!e.child)) continue;
+    if (e.child) {
+      L.push(p + quoteIfNeeded(e.k), p + "{");
+      L.push(...serializeSeq(e.child, ind + 4));
+      L.push(p + "}");
+    } else {
+      L.push(p + quoteIfNeeded(e.k) + " " + quoteIfNeeded(e.v));
     }
   }
-  // also any nested under other names
+  return L;
+}
+
+// One TFBot { ... } block -> bot object. Handles "Template X" AND "Class X" bots.
+// Skill + Attributes go into form fields; everything else (Tag, BehaviorModifiers,
+// Name, MaxVisionRange, ItemAttributes, ...) is kept verbatim in `extra`.
+function parseTFBotBlock(tf) {
+  const b = makeBot();
+  const m = kvMap(tf);
+  const useClass = m.Template == null && m.Class != null;
+  if (m.Template != null) b.template = stripQuotes(m.Template);
+  else if (m.Class != null) b.template = "Class " + stripQuotes(m.Class);
+  b.skill = m.Skill != null ? stripQuotes(m.Skill) : "";
+  b.attributes = tf._kv.filter(([k]) => k === "Attributes").map(([, v]) => stripQuotes(v));
+  b.extra = serializeSeq(tf, 0, (k, isBlk) => !isBlk && (k === "Attributes" || k === "Template" || k === "Skill" || (k === "Class" && useClass)));
+  return b;
+}
+
+function collectBots(block) {
+  const out = [];
+  for (const [name, child] of block._blocks) {
+    if (name === "TFBot") out.push(parseTFBotBlock(child));
+    else if (name === "Squad" || name === "RandomChoice") out.push(...collectBots(child));
+  }
   return out;
+}
+
+const WS_STRUCT = ["TFBot", "Squad", "RandomChoice", "Tank"];
+const WS_KNOWN = ["Name", "Where", "TotalCount", "MaxActive", "SpawnCount", "WaitBeforeStarting", "WaitBetweenSpawns", "WaitBetweenSpawnsAfterDeath", "TotalCurrency", "Support", "WaitForAllDead", "WaitForAllSpawned"];
+const TANK_KNOWN = ["Health", "Speed", "Name", "StartingPathTrackNode", "Path", "Skin"];
+
+// Can the form represent this WaveSpawn without losing structure?
+function spawnIsRepresentable(spBlock) {
+  const st = spBlock._blocks.filter(([n]) => WS_STRUCT.includes(n));
+  if (st.length !== 1) return false;
+  const [name, child] = st[0];
+  if (name === "Squad" || name === "RandomChoice") {
+    if (child._kv.length || !child._blocks.length) return false;
+    if (child._blocks.some(([n]) => n !== "TFBot")) return false;
+  }
+  return true;
 }
 
 function parseWaveSpawnBlock(spBlock) {
   const m = kvMap(spBlock);
+  // Game defaults for keys that are absent (not the UI's "new spawn" defaults)
+  const afterDeath = m.WaitBetweenSpawns == null && m.WaitBetweenSpawnsAfterDeath != null;
   const sp = {
     id: mkId(),
     type: "single",
     name: m.Name != null ? stripQuotes(m.Name) : "",
     where: m.Where != null ? stripQuotes(m.Where) : "spawnbot",
-    totalCount: m.TotalCount != null ? Number(m.TotalCount) || 0 : 10,
-    maxActive: m.MaxActive != null ? Number(m.MaxActive) || 0 : 5,
-    spawnCount: m.SpawnCount != null ? Number(m.SpawnCount) || 0 : 2,
-    waitBefore: m.WaitBeforeStarting != null ? Number(m.WaitBeforeStarting) || 0 : 0,
-    waitBetween: (m.WaitBetweenSpawns != null ? Number(m.WaitBetweenSpawns) : (m.WaitBetweenSpawnsAfterDeath != null ? Number(m.WaitBetweenSpawnsAfterDeath) : 5)) || 0,
-    totalCurrency: m.TotalCurrency != null ? Number(m.TotalCurrency) || 0 : 100,
+    totalCount: numOr(m.TotalCount, 0),
+    maxActive: numOr(m.MaxActive, 999),
+    spawnCount: numOr(m.SpawnCount, 1),
+    waitBefore: numOr(m.WaitBeforeStarting, 0),
+    waitBetween: numOr(afterDeath ? m.WaitBetweenSpawnsAfterDeath : m.WaitBetweenSpawns, 0),
+    betweenAfterDeath: afterDeath,
+    totalCurrency: numOr(m.TotalCurrency, 0),
     support: m.Support != null ? (String(m.Support).toLowerCase() === "limited" ? "limited" : (String(m.Support) === "1" || String(m.Support).toLowerCase() === "true" ? "1" : "none")) : "none",
     waitDead: m.WaitForAllDead != null ? stripQuotes(m.WaitForAllDead) : "",
     waitSpawned: m.WaitForAllSpawned != null ? stripQuotes(m.WaitForAllSpawned) : "",
@@ -150,63 +208,78 @@ function parseWaveSpawnBlock(spBlock) {
     squadBots: [makeBot(), makeBot()],
     randomBots: [makeBot(), makeBot()],
     tank: { health: 30000, speed: 75, name: "Tank", path: "boss_path_1", skin: 0 },
+    // every other key / block in the WaveSpawn (FirstSpawnOutput, LastSpawnOutput, sounds, ...)
+    extra: serializeSeq(spBlock, 0, (k, isBlk) => (isBlk ? WS_STRUCT.includes(k) : WS_KNOWN.includes(k))),
     override: "",
   };
 
   const tank = firstBlock(spBlock, "Tank");
-  if (tank) {
-    sp.type = "tank";
-    const tm = kvMap(tank);
-    sp.tank = {
-      health: tm.Health != null ? Number(tm.Health) || 30000 : 30000,
-      speed: tm.Speed != null ? Number(tm.Speed) || 75 : 75,
-      name: tm.Name != null ? stripQuotes(tm.Name) : "Tank",
-      path: tm.StartingPathTrackNode != null ? stripQuotes(tm.StartingPathTrackNode) : (tm.Path != null ? stripQuotes(tm.Path) : "boss_path_1"),
-      skin: tm.Skin != null ? Number(tm.Skin) || 0 : 0,
-    };
-    return sp;
-  }
-
   const squad = firstBlock(spBlock, "Squad");
   const random = firstBlock(spBlock, "RandomChoice");
-  if (squad) {
+  if (tank) {
+    sp.type = "tank";
+    sp.fromTank = true;
+    sp.tankKeep = { total: numOr(m.TotalCount, 1), max: numOr(m.MaxActive, 999), spawn: numOr(m.SpawnCount, 1), between: numOr(m.WaitBetweenSpawns, 0) };
+    const tm = kvMap(tank);
+    sp.tank = {
+      health: numOr(tm.Health, 30000),
+      speed: numOr(tm.Speed, 75),
+      name: tm.Name != null ? stripQuotes(tm.Name) : "Tank",
+      path: tm.StartingPathTrackNode != null ? stripQuotes(tm.StartingPathTrackNode) : (tm.Path != null ? stripQuotes(tm.Path) : "boss_path_1"),
+      skin: numOr(tm.Skin, 0),
+      extra: serializeSeq(tank, 0, (k, isBlk) => !isBlk && TANK_KNOWN.includes(k)), // OnKilledOutput etc.
+    };
+  } else if (squad) {
     sp.type = "squad";
-    const tmpls = collectTemplates(squad);
-    sp.squadBots = (tmpls.length ? tmpls : ["Class Scout"]).map((tmpl) => {
-      const b = makeBot();
-      b.template = tmpl;
-      return b;
-    });
-    if (sp.squadBots.length < 1) sp.squadBots = [makeBot()];
+    const bots = collectBots(squad);
+    sp.squadBots = bots.length ? bots : [makeBot()];
   } else if (random) {
     sp.type = "random";
-    const tmpls = collectTemplates(random);
-    sp.randomBots = (tmpls.length ? tmpls : ["Class Scout", "Class Scout"]).map((tmpl) => {
-      const b = makeBot();
-      b.template = tmpl;
-      return b;
-    });
-    if (sp.randomBots.length < 2) sp.randomBots = [makeBot(), makeBot()];
+    const bots = collectBots(random);
+    sp.randomBots = bots.length ? bots : [makeBot(), makeBot()];
   } else {
-    sp.type = "single";
-    const tmpls = collectTemplates(spBlock);
-    const tmpl = tmpls[0] || "Class Scout";
-    const b = makeBot();
-    b.template = tmpl;
-    // skill from first TFBot if present
     const tf = firstBlock(spBlock, "TFBot");
-    if (tf) {
-      const tkm = kvMap(tf);
-      if (tkm.Skill) b.skill = stripQuotes(tkm.Skill);
-    }
-    sp.bots = [b];
+    sp.bots = [tf ? parseTFBotBlock(tf) : makeBot()];
+  }
+
+  // Structures the form can't model (nested Squad in RandomChoice, several top-level
+  // TFBots, ...): keep the exact original text so nothing is lost on save.
+  if (!spawnIsRepresentable(spBlock)) {
+    sp.override = ["WaveSpawn", "{", ...serializeSeq(spBlock, 4), "}"].join("\n");
+    sp.rawKept = true;
   }
   return sp;
 }
 
+function parseMissionBlock(mb) {
+  const m = kvMap(mb);
+  const tf = firstBlock(mb, "TFBot");
+  let tmpl = "T_TFBot_SentryBuster", skill = "", extra = [];
+  if (tf) {
+    const bot = parseTFBotBlock(tf);
+    if (kvMap(tf).Template != null || kvMap(tf).Class != null) tmpl = bot.template;
+    skill = bot.skill;
+    // keep Attributes + Name + MaxVisionRange + anything else on the mission bot
+    extra = serializeSeq(tf, 0, (k, isBlk) => !isBlk && (k === "Template" || k === "Skill" || (k === "Class" && kvMap(tf).Template == null)));
+  }
+  return {
+    id: mkId(),
+    obj: m.Objective != null ? stripQuotes(m.Objective) : "DestroySentries",
+    ic: numOr(m.InitialCooldown, 0),
+    where: m.Where != null ? stripQuotes(m.Where) : "spawnbot",
+    bw: numOr(m.BeginAtWave, 1),
+    rw: numOr(m.RunForThisManyWaves, 1),
+    ct: numOr(m.CooldownTime, 0),
+    dc: m.DesiredCount != null ? numOr(m.DesiredCount, 1) : "", // "" = key absent, not written back
+    tmpl,
+    skill,
+    extra,
+    mextra: serializeSeq(mb, 0, (k, isBlk) => (isBlk ? k === "TFBot" : ["Objective", "InitialCooldown", "Where", "BeginAtWave", "RunForThisManyWaves", "CooldownTime", "DesiredCount"].includes(k))),
+  };
+}
+
 function parsePop(text) {
   const tokens = tokenizePop(text);
-  // Find WaveSchedule {
   let wsIdx = -1;
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i] === "WaveSchedule" && tokens[i + 1] === "{") {
@@ -214,50 +287,59 @@ function parsePop(text) {
       break;
     }
   }
-  if (wsIdx < 0) {
-    return null;
-  }
+  if (wsIdx < 0) return null;
   const [root] = parseBlock(tokens, wsIdx);
   const top = kvMap(root);
 
+  const bases = [];
+  String(text || "").replace(/^[ \t]*#base[ \t]+(\S+)/gim, (_, f) => { bases.push(f); return ""; });
+
+  const atk = top.CanBotsAttackWhileInSpawnRoom != null ? stripQuotes(top.CanBotsAttackWhileInSpawnRoom).toLowerCase() : "no";
   const g = {
-    money: top.StartingCurrency != null ? Number(top.StartingCurrency) || 800 : 800,
-    respawn: top.RespawnWaveTime != null ? Number(top.RespawnWaveTime) || 6 : 6,
-    attack: top.CanBotsAttackWhileInSpawnRoom != null ? stripQuotes(top.CanBotsAttackWhileInSpawnRoom) : "no",
-    adv: top.Advanced != null ? Number(top.Advanced) || 1 : 1,
+    money: numOr(top.StartingCurrency, 800),
+    respawn: numOr(top.RespawnWaveTime, 6),
+    attack: ["yes", "1", "true"].includes(atk) ? "yes" : "no",
+    adv: numOr(top.Advanced, 0),
     map: "mvm_coaltown",
-    extra: "",
+    bases,
+    // any other top-level setting (EventPopfile, FixedRespawnWaveTime, ...) lands in the Extra box
+    extra: serializeSeq(root, 0, (k, isBlk) => (isBlk ? ["Mission", "Wave", "Templates"].includes(k) : ["StartingCurrency", "RespawnWaveTime", "CanBotsAttackWhileInSpawnRoom", "Advanced"].includes(k))).join("\n"),
   };
 
-  const mis = blocksNamed(root, "Mission").map((mb) => {
-    const m = kvMap(mb);
-    const tf = firstBlock(mb, "TFBot");
-    const tm = tf ? kvMap(tf) : {};
-    return {
-      id: mkId(),
-      obj: m.Objective != null ? stripQuotes(m.Objective) : "DestroySentries",
-      ic: m.InitialCooldown != null ? Number(m.InitialCooldown) || 0 : 0,
-      where: m.Where != null ? stripQuotes(m.Where) : "spawnbot",
-      bw: m.BeginAtWave != null ? Number(m.BeginAtWave) || 1 : 1,
-      rw: m.RunForThisManyWaves != null ? Number(m.RunForThisManyWaves) || 1 : 1,
-      ct: m.CooldownTime != null ? Number(m.CooldownTime) || 0 : 0,
-      dc: m.DesiredCount != null ? Number(m.DesiredCount) || 1 : 1,
-      tmpl: tm.Template != null ? stripQuotes(tm.Template) : "T_TFBot_SentryBuster",
-      skill: tm.Skill != null ? stripQuotes(tm.Skill) : "",
-    };
+  const mis = blocksNamed(root, "Mission").map(parseMissionBlock);
+
+  // Templates { ... } -> custom bot templates (kept verbatim through `override`)
+  const cust = [];
+  blocksNamed(root, "Templates").forEach((tb) => {
+    for (const [name, child] of tb._blocks) {
+      const cm = kvMap(child);
+      const c = makeCustomBot();
+      c.tName = name;
+      c.cls = cm.Class != null ? stripQuotes(cm.Class) : "Scout";
+      c.dName = cm.Name != null ? stripQuotes(cm.Name) : name;
+      c.skill = cm.Skill != null ? stripQuotes(cm.Skill) : "";
+      c.override = [name, "{", ...serializeSeq(child, 4), "}"].join("\n");
+      cust.push(c);
+    }
   });
 
+  let rawCount = 0;
   const wavs = blocksNamed(root, "Wave").map((wb) => {
     const spawns = blocksNamed(wb, "WaveSpawn").map(parseWaveSpawnBlock);
+    rawCount += spawns.filter((x) => x.rawKept).length;
     return {
       id: mkId(),
       spawns: spawns.length ? spawns : [makeWS()],
+      // StartWaveOutput / DoneOutput / WaitWhenDone / Checkpoint / anything else, verbatim
+      extra: serializeSeq(wb, 0, (k, isBlk) => isBlk && k === "WaveSpawn"),
     };
   });
 
   return {
     g,
     mis,
+    cust,
+    rawCount,
     wavs: wavs.length ? wavs : [{ id: mkId(), spawns: [makeWS()] }],
   };
 }
@@ -545,6 +627,7 @@ function genBotCode(b, ind) {
     if (b.skill) L.push(p + "    Skill " + b.skill);
   }
   b.attributes.forEach(a => L.push(p + "    Attributes " + a));
+  (b.extra || []).forEach(line => L.push(p + "    " + line));
   L.push(p + "}");
   return L.join("\n");
 }
@@ -555,15 +638,21 @@ function genWSCode(sp) {
   if (sp.waitDead) L.push('    WaitForAllDead "' + sp.waitDead + '"');
   if (sp.waitSpawned) L.push('    WaitForAllSpawned "' + sp.waitSpawned + '"');
   if (sp.type === "tank") {
-    L.push("    TotalCount 1", "    MaxActive 1", "    SpawnCount 1", "    WaitBeforeStarting " + sp.waitBefore, "    WaitBetweenSpawns 0", "    TotalCurrency " + sp.totalCurrency);
-    L.push("", "    FirstSpawnOutput", "    {", "        Target boss_spawn_relay", "        Action Trigger", "    }");
+    const k = sp.fromTank && sp.tankKeep ? sp.tankKeep : { total: 1, max: 1, spawn: 1, between: 0 };
+    L.push("    TotalCount " + k.total, "    MaxActive " + k.max, "    SpawnCount " + k.spawn, "    WaitBeforeStarting " + sp.waitBefore, "    WaitBetweenSpawns " + k.between, "    TotalCurrency " + sp.totalCurrency);
+    (sp.extra || []).forEach(x => L.push("    " + x));
+    if (!sp.fromTank) L.push("", "    FirstSpawnOutput", "    {", "        Target boss_spawn_relay", "        Action Trigger", "    }");
     L.push("", "    Tank", "    {", '        Name "' + sp.tank.name + '"', "        Health " + sp.tank.health, "        Speed " + sp.tank.speed);
-    if (sp.tank.skin === 1) L.push("        Skin 1");
-    L.push('        StartingPathTrackNode "' + sp.tank.path + '"', "", "        OnKilledOutput", "        {", "            Target boss_dead_relay", "            Action Trigger", "        }", "        OnBombDroppedOutput", "        {", "            Target boss_deploy_relay", "            Action Trigger", "        }", "    }");
+    if (sp.tank.skin) L.push("        Skin " + sp.tank.skin);
+    L.push('        StartingPathTrackNode "' + sp.tank.path + '"');
+    if (sp.fromTank && sp.tank.extra) sp.tank.extra.forEach(x => L.push("        " + x));
+    else L.push("", "        OnKilledOutput", "        {", "            Target boss_dead_relay", "            Action Trigger", "        }", "        OnBombDroppedOutput", "        {", "            Target boss_deploy_relay", "            Action Trigger", "        }");
+    L.push("    }");
   } else {
-    L.push("    Where " + sp.where, "    TotalCount " + sp.totalCount, "    MaxActive " + sp.maxActive, "    SpawnCount " + sp.spawnCount, "    WaitBeforeStarting " + sp.waitBefore, "    WaitBetweenSpawns " + sp.waitBetween, "    TotalCurrency " + sp.totalCurrency);
+    L.push("    Where " + sp.where, "    TotalCount " + sp.totalCount, "    MaxActive " + sp.maxActive, "    SpawnCount " + sp.spawnCount, "    WaitBeforeStarting " + sp.waitBefore, "    " + (sp.betweenAfterDeath ? "WaitBetweenSpawnsAfterDeath " : "WaitBetweenSpawns ") + sp.waitBetween, "    TotalCurrency " + sp.totalCurrency);
     if (sp.support === "1") L.push("    Support 1");
     if (sp.support === "limited") L.push("    Support Limited");
+    (sp.extra || []).forEach(x => L.push("    " + x));
     if (sp.type === "single") L.push("", genBotCode(sp.bots[0], 4));
     else if (sp.type === "squad") { L.push("", "    Squad", "    {"); sp.squadBots.forEach(b => L.push(genBotCode(b, 8))); L.push("    }"); }
     else if (sp.type === "random") { L.push("", "    RandomChoice", "    {"); sp.randomBots.forEach(b => L.push(genBotCode(b, 8))); L.push("    }"); }
@@ -594,7 +683,9 @@ function genCustom(c) {
 }
  
 function genPop(g, mis, wavs, cust) {
-  const L = ["#base robot_giant.pop", "#base robot_standard.pop", "#base robot_gatebot.pop"];
+  const bases = ["robot_giant.pop", "robot_standard.pop", "robot_gatebot.pop"];
+  (g.bases || []).forEach(f => { if (!bases.includes(f)) bases.push(f); });
+  const L = bases.map(f => "#base " + f);
   L.push("", "WaveSchedule", "{", "    StartingCurrency " + g.money, "    RespawnWaveTime " + g.respawn, "    CanBotsAttackWhileInSpawnRoom " + g.attack, "    Advanced " + g.adv);
   if (g.extra) g.extra.split("\n").filter(x => x.trim()).forEach(x => L.push("    " + x.trim()));
   if (cust.length) {
@@ -603,38 +694,25 @@ function genPop(g, mis, wavs, cust) {
     L.push("    }");
   }
   L.push("");
-  mis.forEach((m, i) => {
-    L.push("    Mission", "    {", "        Objective " + m.obj, "        InitialCooldown " + m.ic, "        Where " + m.where, "        BeginAtWave " + m.bw, "        RunForThisManyWaves " + m.rw, "        CooldownTime " + m.ct, "        DesiredCount " + m.dc, "", "        TFBot", "        {", "            Template " + m.tmpl);
+  mis.forEach((m) => {
+    L.push("    Mission", "    {", "        Objective " + m.obj, "        InitialCooldown " + m.ic, "        Where " + m.where, "        BeginAtWave " + m.bw, "        RunForThisManyWaves " + m.rw, "        CooldownTime " + m.ct);
+    if (m.dc !== "" && m.dc != null) L.push("        DesiredCount " + m.dc);
+    (m.mextra || []).forEach(x => L.push("        " + x));
+    const tm = String(m.tmpl || "");
+    L.push("", "        TFBot", "        {", tm.startsWith("Class ") ? "            Class " + tm.slice(6) : "            Template " + tm);
     if (m.skill) L.push("            Skill " + m.skill);
+    (m.extra || []).forEach(x => L.push("            " + x));
     L.push("        }", "    }", "");
   });
-  wavs.forEach((wave, wi) => {
-    L.push("    Wave", "    {", "        StartWaveOutput", "        {", "            Target wave_start_relay", "            Action Trigger", "        }", "        DoneOutput", "        {", "            Target wave_finished_relay", "            Action Trigger", "        }", "");
+  wavs.forEach((wave) => {
+    L.push("    Wave", "    {");
+    if (wave.extra) wave.extra.forEach(x => L.push("        " + x));
+    else L.push("        StartWaveOutput", "        {", "            Target wave_start_relay", "            Action Trigger", "        }", "        DoneOutput", "        {", "            Target wave_finished_relay", "            Action Trigger", "        }");
+    L.push("");
     wave.spawns.forEach(sp => {
-      if (sp.override) {
-        sp.override.split("\n").forEach(x => L.push("        " + x));
-        L.push("");
-      } else {
-      L.push("        WaveSpawn", "        {");
-      if (sp.name) L.push('            Name "' + sp.name + '"');
-      if (sp.waitDead) L.push('            WaitForAllDead "' + sp.waitDead + '"');
-      if (sp.waitSpawned) L.push('            WaitForAllSpawned "' + sp.waitSpawned + '"');
-      if (sp.type === "tank") {
-        L.push("            TotalCount 1", "            MaxActive 1", "            SpawnCount 1", "            WaitBeforeStarting " + sp.waitBefore, "            WaitBetweenSpawns 0", "            TotalCurrency " + sp.totalCurrency);
-        L.push("", "            FirstSpawnOutput", "            {", "                Target boss_spawn_relay", "                Action Trigger", "            }");
-        L.push("", "            Tank", "            {", '                Name "' + sp.tank.name + '"', "                Health " + sp.tank.health, "                Speed " + sp.tank.speed);
-        if (sp.tank.skin === 1) L.push("                Skin 1");
-        L.push('                StartingPathTrackNode "' + sp.tank.path + '"', "", "                OnKilledOutput", "                {", "                    Target boss_dead_relay", "                    Action Trigger", "                }", "                OnBombDroppedOutput", "                {", "                    Target boss_deploy_relay", "                    Action Trigger", "                }", "            }");
-      } else {
-        L.push("            Where " + sp.where, "            TotalCount " + sp.totalCount, "            MaxActive " + sp.maxActive, "            SpawnCount " + sp.spawnCount, "            WaitBeforeStarting " + sp.waitBefore, "            WaitBetweenSpawns " + sp.waitBetween, "            TotalCurrency " + sp.totalCurrency);
-        if (sp.support === "1") L.push("            Support 1");
-        if (sp.support === "limited") L.push("            Support Limited");
-        if (sp.type === "single") L.push("", genBotCode(sp.bots[0], 12));
-        else if (sp.type === "squad") { L.push("", "            Squad", "            {"); sp.squadBots.forEach(b => L.push(genBotCode(b, 16))); L.push("            }"); }
-        else if (sp.type === "random") { L.push("", "            RandomChoice", "            {"); sp.randomBots.forEach(b => L.push(genBotCode(b, 16))); L.push("            }"); }
-      }
-      L.push("        }", "");
-      }
+      const code = sp.override ? sp.override : genWSCode(sp);
+      code.split("\n").forEach(x => L.push(x ? "        " + x : x));
+      L.push("");
     });
     L.push("    }", "");
   });
@@ -768,7 +846,7 @@ function isGiantTemplate(tmpl) {
  
 function getBotsFromSpawn(sp) {
   // Returns array of { tmpl, icon, crit, giant, count }
-  if (sp.type === "tank") return [{ tmpl: "__tank__", icon: IC + "tank.png", crit: false, giant: true, count: 1 }];
+  if (sp.type === "tank") return [{ tmpl: "__tank__", icon: IC + "tank.png", crit: false, giant: true, count: sp.fromTank && sp.tankKeep ? sp.tankKeep.total : 1 }];
   const count = sp.totalCount;
   const isBig = (b) => isGiantTemplate(b.template) || (b.attributes || []).includes("MiniBoss");
   if (sp.type === "single" && sp.bots[0]) {
@@ -781,9 +859,19 @@ function getBotsFromSpawn(sp) {
       tmpl: b.template, icon: getIcon(b.template), crit: (b.attributes || []).includes("AlwaysCrit"), giant: isBig(b), count: perMember
     }));
   }
-  if (sp.type === "random" && sp.randomBots && sp.randomBots[0]) {
-    const b = sp.randomBots[0];
-    return [{ tmpl: b.template, icon: getIcon(b.template), crit: (b.attributes || []).includes("AlwaysCrit"), giant: isBig(b), count }];
+  if (sp.type === "random" && sp.randomBots && sp.randomBots.length) {
+    // RandomChoice picks uniformly, so each entry gets an equal share of TotalCount (expected value)
+    const n = sp.randomBots.length;
+    const groups = [];
+    sp.randomBots.forEach(b => {
+      const key = b.template + "|" + (b.attributes || []).slice().sort().join(",");
+      const ex = groups.find(g => g.key === key);
+      if (ex) ex.n++; else groups.push({ key, bot: b, n: 1 });
+    });
+    return groups.map(g => ({
+      tmpl: g.bot.template, icon: getIcon(g.bot.template), crit: (g.bot.attributes || []).includes("AlwaysCrit"),
+      giant: isBig(g.bot), count: Math.round(count * g.n / n)
+    }));
   }
   return [];
 }
@@ -1054,6 +1142,7 @@ export default function App() {
           })),
         }));
         sg(nextG);
+        scust(parsed.cust || []);
         smis(fixedMis.length ? fixedMis : []);
         swavs(fixedWavs.length ? fixedWavs : [{ id: mkId(), spawns: [makeWS()] }]);
         saw(0);
@@ -1070,7 +1159,7 @@ export default function App() {
       sprev(true);
       setFilesOpen(false);
       showToast(parsed
-        ? ("Loaded " + filename + " into form")
+        ? ("Loaded " + filename + " into form" + (parsed.rawCount ? " (" + parsed.rawCount + " complex WaveSpawn" + (parsed.rawCount > 1 ? "s" : "") + " kept as raw text)" : ""))
         : ("Loaded " + filename + " (preview only — could not parse WaveSchedule)"));
     } catch (e) {
       alert("Failed to load: " + (e && e.message ? e.message : e));
