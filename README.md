@@ -2,8 +2,6 @@
 
 Heavyily editted version of Consulcast Gaming's MVM Popfile Creator. Though this definitely has AI in it, this is mainly just for me, as there is not really any good way to easily make MVM popfiles (mvm.tf has not gotten an update in literally years).
 
-4. Open http://localhost:5173 in your browser
-
 ## Build as Desktop App (.exe)
 
 ### Option A: Portable .exe (recommended)
@@ -47,7 +45,7 @@ Open `dist/index.html` directly in your browser. You can make a desktop shortcut
 - **Waves** — Unlimited waves with Single/Squad/RandomChoice/Tank wavespawns
 - **All Valve templates** — Verified against robot_standard.pop, robot_giant.pop, robot_gatebot.pop
 - **Editable previews** — Auto-generated code you can hand-edit for full control
-- **Save/Load Functionality** — Will save your popfile as a json that can be loaded later
+- **Save/Load Functionality** — Will save inside of the "mpc_medallium/saves" folder that is automatically created upon the EXE's launch.
 - **Light/Dark mode**
 - Release includes a feature that can fix certain broken valve templates. Currently only used for fixing non-gatebot Heal-on-Kill Heavy, may remove it if unpopular or not necessary
 
