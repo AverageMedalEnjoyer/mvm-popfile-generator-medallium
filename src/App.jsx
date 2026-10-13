@@ -68,30 +68,68 @@ const { ATTR_LIST, WEAPONS_BY_CLASS, COSMETICS_BY_CLASS } = (() => {
     }
   }
   // also index "all"
+  attrs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  for (const cls of Object.keys(weapons)) {
+    for (const slot of Object.keys(weapons[cls])) {
+      weapons[cls][slot].sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name, undefined, { sensitivity: "base" }));
+    }
+  }
+  for (const cls of Object.keys(cosmetics)) {
+    cosmetics[cls].sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name, undefined, { sensitivity: "base" }));
+  }
   return { ATTR_LIST: attrs, WEAPONS_BY_CLASS: weapons, COSMETICS_BY_CLASS: cosmetics };
 })();
 
-function getWeaponsForClass(cls, slot) {
+function getWeaponsForClass(cls, slot, classOnly = false) {
   const c = String(cls || "scout").toLowerCase().replace("heavyweapons", "heavy");
-  const list = (WEAPONS_BY_CLASS[c] && WEAPONS_BY_CLASS[c][slot]) || [];
-  const all = (WEAPONS_BY_CLASS["all"] && WEAPONS_BY_CLASS["all"][slot]) || [];
   const seen = new Set();
   const out = [];
-  for (const x of [...list, ...all]) {
-    if (!seen.has(x.name)) { seen.add(x.name); out.push(x); }
+  const push = (arr) => {
+    for (const x of arr || []) {
+      if (!seen.has(x.name)) { seen.add(x.name); out.push(x); }
+    }
+  };
+  if (classOnly) {
+    push(WEAPONS_BY_CLASS[c] && WEAPONS_BY_CLASS[c][slot]);
+  } else {
+    push(WEAPONS_BY_CLASS[c] && WEAPONS_BY_CLASS[c][slot]);
+    push(WEAPONS_BY_CLASS["all"] && WEAPONS_BY_CLASS["all"][slot]);
+    for (const other of Object.keys(WEAPONS_BY_CLASS)) {
+      if (other === c || other === "all") continue;
+      push(WEAPONS_BY_CLASS[other] && WEAPONS_BY_CLASS[other][slot]);
+    }
   }
+  out.sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name, undefined, { sensitivity: "base" }));
   return out;
 }
-function getCosmeticsForClass(cls) {
+function getCosmeticsForClass(cls, classOnly = false) {
   const c = String(cls || "scout").toLowerCase().replace("heavyweapons", "heavy");
-  const list = COSMETICS_BY_CLASS[c] || [];
-  const all = COSMETICS_BY_CLASS["all"] || [];
   const seen = new Set();
   const out = [];
-  for (const x of [...list, ...all]) {
-    if (!seen.has(x.name)) { seen.add(x.name); out.push(x); }
+  const push = (arr) => {
+    for (const x of arr || []) {
+      if (!seen.has(x.name)) { seen.add(x.name); out.push(x); }
+    }
+  };
+  if (classOnly) {
+    push(COSMETICS_BY_CLASS[c]);
+  } else {
+    push(COSMETICS_BY_CLASS[c]);
+    push(COSMETICS_BY_CLASS["all"]);
+    for (const other of Object.keys(COSMETICS_BY_CLASS)) {
+      if (other === c || other === "all") continue;
+      push(COSMETICS_BY_CLASS[other]);
+    }
   }
+  out.sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name, undefined, { sensitivity: "base" }));
   return out;
+}
+function isTournamentMedal(item) {
+  const n = String(item?.name || "");
+  const d = String(item?.display || "");
+  return /tournament\s*medal/i.test(n) || /tournament\s*medal/i.test(d) ||
+    n.startsWith("TournamentMedal") || d.startsWith("TournamentMedal") ||
+    /TournamentMedal/i.test(n) || /TournamentMedal/i.test(d);
 }
 function classFromTemplate(tmpl) {
   if (!tmpl) return "scout";
@@ -284,18 +322,18 @@ function parseTFBotBlock(tf) {
   if (m.Template != null) b.template = stripQuotes(m.Template);
   else if (m.Class != null) b.template = "Class " + stripQuotes(m.Class);
   b.skill = m.Skill != null ? stripQuotes(m.Skill) : "";
+  b.name = m.Name != null ? stripQuotes(m.Name) : "";
   b.attributes = tf._kv.filter(([k]) => k === "Attributes").map(([, v]) => stripQuotes(v));
-  // Restore weapons / cosmetics from Item + ItemAttributes so the UI stays selected on reload
   const cls = classFromTemplate(b.template);
   applyLoadoutFromBlock(tf, b, cls);
-  // Keep unknown keys/blocks in extra; skip what the form already owns
   b.extra = serializeSeq(tf, 0, (k, isBlk) => {
-    if (isBlk) return k === "ItemAttributes";
+    if (isBlk) return k === "ItemAttributes" || k === "CharacterAttributes";
     return (
       k === "Attributes" ||
       k === "Template" ||
       k === "Skill" ||
       k === "Item" ||
+      k === "Name" ||
       (k === "Class" && useClass)
     );
   });
@@ -795,9 +833,8 @@ function makeBot() {
     template: "Class Scout",
     skill: "Hard",
     attributes: [],
-    // weapon slots: primary / secondary / melee  (Spy hides primary)
+    name: "",
     weapons: { primary: emptyWep(), secondary: emptyWep(), melee: emptyWep() },
-    // 3 cosmetic slots
     cosmetics: [emptyCos(), emptyCos(), emptyCos()],
   };
 }
@@ -864,6 +901,7 @@ function loadoutForTemplate(tmpl, customBots) {
     attributes: [],
     skill: "",
     cAttrs: [],
+    name: "",
   });
   if (!tmpl) return empty();
   if (String(tmpl).startsWith("Class ")) {
@@ -880,6 +918,7 @@ function loadoutForTemplate(tmpl, customBots) {
       attributes: [...(custom.attrs || [])],
       skill: custom.skill || "",
       cAttrs: (custom.cAttrs || []).filter((r) => r && r.k).map((r) => ({ k: r.k, v: r.v })),
+      name: custom.dName || "",
     };
   }
   const def = TEMPLATE_DEFS[tmpl];
@@ -891,6 +930,7 @@ function loadoutForTemplate(tmpl, customBots) {
       attributes: [...(def.attributes || [])],
       skill: def.skill || "",
       cAttrs: (def.cAttrs || []).map((r) => ({ k: r.k, v: r.v })),
+      name: "",
     };
   }
   return empty();
@@ -952,6 +992,7 @@ function genBotCode(b, ind) {
     L.push(p + "    Template " + b.template);
     if (b.skill) L.push(p + "    Skill " + b.skill);
   }
+  if (b.name) L.push(p + '    Name "' + b.name + '"');
   b.attributes.forEach(a => L.push(p + "    Attributes " + a));
   // weapons + cosmetics as Item lines
   const weps = b.weapons || {};
@@ -1259,7 +1300,7 @@ function CharacterAttributesModal({ t, rows, onChange, onClose }) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 10, width: "min(520px, 96vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}
+        style={{ background: t.card, border: "1px solid " + t.bd, borderRadius: 10, width: "min(720px, 96vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(0,0,0,0.5)", overflow: "hidden" }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid " + t.bd }}>
           <span style={{ fontWeight: 700, color: t.ac, fontSize: 15 }}>Character Attributes</span>
@@ -1268,14 +1309,14 @@ function CharacterAttributesModal({ t, rows, onChange, onClose }) {
         <div style={{ padding: "12px 16px", overflowY: "auto", flex: 1 }}>
           <div style={{ fontSize: 11, color: t.txd, marginBottom: 8 }}>Attributes applied to the bot itself (not a specific weapon/cosmetic).</div>
           {list.map((r, ri) => (
-            <div key={ri} style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+            <div key={ri} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center", width: "100%" }}>
               <select
                 value={r.k}
                 onChange={(e) => {
                   const next = list.map((x, i) => (i === ri ? { ...x, k: e.target.value } : x));
                   onChange(next);
                 }}
-                style={{ flex: 2, background: t.ib, color: t.it, border: "1px solid " + t.ibd, borderRadius: 4, padding: "4px 6px", fontSize: 12 }}
+                style={{ flex: 1, minWidth: 0, background: t.ib, color: t.it, border: "1px solid " + t.ibd, borderRadius: 4, padding: "4px 6px", fontSize: 12 }}
               >
                 <option value="">— select attribute —</option>
                 {ATTR_LIST.map((a) => (
@@ -1289,11 +1330,11 @@ function CharacterAttributesModal({ t, rows, onChange, onClose }) {
                   onChange(next);
                 }}
                 placeholder="value"
-                style={{ width: 90, background: t.ib, color: t.it, border: "1px solid " + t.ibd, borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "monospace" }}
+                style={{ width: 100, flexShrink: 0, background: t.ib, color: t.it, border: "1px solid " + t.ibd, borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "monospace" }}
               />
               <button
                 onClick={() => onChange(list.filter((_, i) => i !== ri))}
-                style={{ background: "#5a2020", color: "#fff", border: "none", borderRadius: 4, width: 26, height: 26, cursor: "pointer" }}
+                style={{ background: "#5a2020", color: "#fff", border: "none", borderRadius: 4, width: 28, height: 28, flexShrink: 0, cursor: "pointer" }}
               >X</button>
             </div>
           ))}
@@ -1313,6 +1354,8 @@ function ItemLoadoutModal({ t, mode, bot, onChange, onClose, botClass }) {
   const isSpy = cls === "spy";
   const [tab, setTab] = useState(mode === "weapons" ? (isSpy ? "secondary" : "primary") : "cos0");
   const [search, setSearch] = useState("");
+  const [hideOffClass, setHideOffClass] = useState(true);
+  const [hideMedals, setHideMedals] = useState(true);
   const weps = bot.weapons || { primary: emptyWep(), secondary: emptyWep(), melee: emptyWep() };
   const cos = bot.cosmetics || [emptyCos(), emptyCos(), emptyCos()];
 
@@ -1335,14 +1378,24 @@ function ItemLoadoutModal({ t, mode, bot, onChange, onClose, botClass }) {
   };
 
   const options = (() => {
+    let list;
     if (tab === "primary" || tab === "secondary" || tab === "melee") {
-      return getWeaponsForClass(cls, tab);
+      list = getWeaponsForClass(cls, tab, hideOffClass);
+    } else {
+      list = getCosmeticsForClass(cls, hideOffClass);
     }
-    return getCosmeticsForClass(cls);
+    if (hideMedals) list = list.filter((o) => !isTournamentMedal(o));
+    return list;
   })();
-  const filtered = search
-    ? options.filter(o => (o.display || o.name).toLowerCase().includes(search.toLowerCase()) || o.name.toLowerCase().includes(search.toLowerCase()))
-    : options;
+  const filtered = (() => {
+    if (!search) return options;
+    const q = search.toLowerCase();
+    return options.filter(
+      (o) =>
+        (o.display || o.name).toLowerCase().includes(q) ||
+        o.name.toLowerCase().includes(q)
+    );
+  })();
 
   const attrRows = current.attrs || [];
 
@@ -1373,6 +1426,45 @@ function ItemLoadoutModal({ t, mode, bot, onChange, onClose, botClass }) {
               </button>
             ))
           )}
+        </div>
+        <div style={{ padding: "8px 12px", display: "flex", gap: 8, flexWrap: "wrap", borderBottom: "1px solid " + t.bd, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={() => setHideOffClass((v) => !v)}
+            title={hideOffClass ? "Showing only items for this class" : "Showing items from all classes"}
+            style={{
+              background: hideOffClass ? "#2a4a2a" : t.ci,
+              color: t.tx,
+              border: "1px solid " + t.bd,
+              borderRadius: 4,
+              padding: "5px 10px",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            {hideOffClass ? "✓ " : ""}{mode === "cosmetics" ? "Hide Cosmetics Not For Class" : "Hide Weapons Not For Class"}
+          </button>
+          {mode === "cosmetics" && (
+          <button
+            type="button"
+            onClick={() => setHideMedals((v) => !v)}
+            title={hideMedals ? "Tournament medals hidden" : "Tournament medals shown"}
+            style={{
+              background: hideMedals ? "#2a3a4a" : t.ci,
+              color: t.tx,
+              border: "1px solid " + t.bd,
+              borderRadius: 4,
+              padding: "5px 10px",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            {hideMedals ? "✓ " : ""}Hide Tournament Medals
+          </button>
+          )}
+          <span style={{ fontSize: 11, color: t.txd, marginLeft: "auto" }}>{filtered.length} items</span>
         </div>
         <div style={{ padding: "10px 12px", display: "flex", gap: 8, borderBottom: "1px solid " + t.bd }}>
           <input
@@ -1482,6 +1574,7 @@ function BotPicker({ t, bot, onChange, label, attrList, customBots, onLoadoutSyn
             weapons: lo.weapons,
             cosmetics: lo.cosmetics,
             attributes: lo.attributes || [],
+            name: lo.name || "",
           });
         }} />
         {isCl ? (
@@ -1494,6 +1587,21 @@ function BotPicker({ t, bot, onChange, label, attrList, customBots, onLoadoutSyn
             {SKILLS.map(s => <option key={s} value={s}>{"Override: " + s}</option>)}
           </select>
         )}
+        <input
+          type="text"
+          value={bot.name || ""}
+          placeholder="Name (optional)"
+          title="TFBot Name — leave blank to use the template default"
+          onChange={(e) => {
+            const nv = e.target.value;
+            const next = { ...bot, name: nv };
+            onChange(next);
+            if (onLoadoutSync && bot.template && !String(bot.template).startsWith("Class ")) {
+              onLoadoutSync({ ...next, _syncName: true });
+            }
+          }}
+          style={{ width: 140, background: t.ib, color: t.it, border: "1px solid " + t.ibd, borderRadius: 4, padding: "5px 8px", fontSize: 12 }}
+        />
         <button
           onClick={() => setLoadoutMode("weapons")}
           title={wepSummary}
@@ -1681,14 +1789,23 @@ export default function App() {
     const idx = cust.findIndex((c) => c.tName === tname);
     if (idx < 0) return;
     const lo = cloneLoadout(bot);
-    if (loadoutsEqual(cust[idx], lo)) return;
+    const nameSync = bot._syncName && bot.name != null;
+    const loadoutChanged = !loadoutsEqual(cust[idx], lo);
+    const nameChanged = nameSync && (cust[idx].dName || "") !== (bot.name || "");
+    if (!loadoutChanged && !nameChanged) return;
     const next = [...cust];
-    next[idx] = { ...next[idx], weapons: lo.weapons, cosmetics: lo.cosmetics, override: "" };
+    const patch = { ...next[idx], override: "" };
+    if (loadoutChanged) {
+      patch.weapons = lo.weapons;
+      patch.cosmetics = lo.cosmetics;
+    }
+    if (nameChanged) patch.dName = bot.name || next[idx].dName;
+    next[idx] = patch;
     scust(next);
   }
 
   // Push loadout from Bot Creator into every WaveSpawn bot that uses this template
-  function syncLoadoutFromCustom(tName, weapons, cosmetics) {
+  function syncLoadoutFromCustom(tName, weapons, cosmetics, dName) {
     if (!tName) return;
     let changed = false;
     const nextWaves = wavs.map((w) => {
@@ -1698,10 +1815,48 @@ export default function App() {
           let any = false;
           const out = arr.map((b) => {
             if (b.template !== tName) return b;
-            const lo = { weapons, cosmetics };
-            if (loadoutsEqual(b, lo)) return b;
+            let nb = b;
+            if (weapons != null && cosmetics != null) {
+              const lo = { weapons, cosmetics };
+              if (!loadoutsEqual(b, lo)) {
+                const cl = cloneLoadout({ weapons, cosmetics });
+                nb = { ...nb, weapons: cl.weapons, cosmetics: cl.cosmetics };
+                any = true;
+              }
+            }
+            if (dName != null && (nb.name || "") !== dName) {
+              nb = { ...nb, name: dName };
+              any = true;
+            }
+            return nb;
+          });
+          if (any) changed = true;
+          return any ? out : arr;
+        };
+        return {
+          ...sp,
+          bots: patchBots(sp.bots),
+          squadBots: patchBots(sp.squadBots),
+          randomBots: patchBots(sp.randomBots),
+        };
+      });
+      return { ...w, spawns };
+    });
+    if (changed) swavs(nextWaves);
+  }
+
+  function syncTemplateRename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    let changed = false;
+    const nextWaves = wavs.map((w) => {
+      const spawns = w.spawns.map((sp) => {
+        const patchBots = (arr) => {
+          if (!arr) return arr;
+          let any = false;
+          const out = arr.map((b) => {
+            if (b.template !== oldName) return b;
             any = true;
-            return { ...b, weapons: cloneLoadout({ weapons, cosmetics }).weapons, cosmetics: cloneLoadout({ weapons, cosmetics }).cosmetics };
+            return { ...b, template: newName };
           });
           if (any) changed = true;
           return any ? out : arr;
@@ -2165,9 +2320,16 @@ export default function App() {
                       <button onClick={() => scust(cust.filter((_, j) => j !== ci))} style={btnX}>X</button>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                      <Inp t={t} label="Template Name" value={c.tName} onChange={v => uc("tName", v)} type="text" width={180} />
+                      <Inp t={t} label="Template Name" value={c.tName} onChange={v => {
+                        const old = c.tName;
+                        uc("tName", v);
+                        if (old && v && old !== v) syncTemplateRename(old, v);
+                      }} type="text" width={180} />
                       <Sel t={t} label="Class" value={c.cls} onChange={v => uc("cls", v)}>{CLASSES.map(x => <option key={x}>{x}</option>)}</Sel>
-                      <Inp t={t} label="Name" value={c.dName} onChange={v => uc("dName", v)} type="text" width={140} />
+                      <Inp t={t} label="Name" value={c.dName} onChange={v => {
+                        uc("dName", v);
+                        syncLoadoutFromCustom(c.tName, null, null, v);
+                      }} type="text" width={140} />
                       <Sel t={t} label="Skill" value={c.skill} onChange={v => uc("skill", v)}>{SKILLS.map(x => <option key={x}>{x}</option>)}</Sel>
                       <Inp t={t} label="Health" value={c.health} onChange={v => uc("health", v)} type="text" width={70} />
                       <Inp t={t} label="Scale" value={c.scale} onChange={v => uc("scale", v)} type="text" width={60} />
@@ -2210,7 +2372,7 @@ export default function App() {
                             const a = [...cust];
                             a[ci] = { ...a[ci], weapons: nb.weapons, cosmetics: nb.cosmetics, override: "" };
                             scust(a);
-                            syncLoadoutFromCustom(a[ci].tName, nb.weapons, nb.cosmetics);
+                            syncLoadoutFromCustom(a[ci].tName, nb.weapons, nb.cosmetics, a[ci].dName);
                           }}
                           onClose={() => uc("_loadoutMode", null)}
                         />
